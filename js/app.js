@@ -6,7 +6,7 @@ import {
   formatHz,
   formatTime,
 } from "./constants.js";
-import { AudioEngine } from "./audio-engine.js?v=20260606-precision-calibrate";
+import { AudioEngine } from "./audio-engine.js?v=20260606-continuous-sync";
 import { DeviceManager } from "./device-manager.js?v=20260606-all-devices";
 import { SpectrumVisualizer } from "./visualizer.js";
 import {
@@ -1781,6 +1781,18 @@ async function init() {
   engine.addEventListener("playstate", () => {
     updateTransportAvailability(Boolean(engine.objectUrl));
     updateDeckVisuals();
+  });
+  engine.addEventListener("syncstate", (event) => {
+    if (!engine.isPlaying || scratchState) {
+      return;
+    }
+
+    const driftMs = Math.round(event.detail?.maxDriftMs || 0);
+    if (event.detail?.locked) {
+      setEngineStatus("Playing - sync locked");
+    } else if (driftMs > 0) {
+      setEngineStatus(`Auto syncing ${driftMs} ms`, "warn");
+    }
   });
   engine.addEventListener("liveinput", () => {
     updateTransportAvailability(Boolean(engine.objectUrl));

@@ -54,6 +54,8 @@ class SpeakerPath {
     this.spectrum = null;
     this.meter = null;
     this.isolationAvailable = false;
+    this.baseDelayMs = 0;
+    this.syncTrimMs = 0;
 
     this.context = new AudioCtor({ latencyHint: "playback" });
     this.media = new Audio();
@@ -278,13 +280,29 @@ class SpeakerPath {
     smoothValue(this.dryGain.gain, dry, this.context, 0.018);
   }
 
-  setDelayMs(delayMs) {
+  applyDelayMs() {
+    const totalDelayMs = clamp(this.baseDelayMs + this.syncTrimMs, 0, MAX_DELAY_MS);
     smoothValue(
       this.delay.delayTime,
-      clamp(delayMs, 0, MAX_DELAY_MS) / 1000,
+      totalDelayMs / 1000,
       this.context,
       0.012,
     );
+  }
+
+  setDelayMs(delayMs) {
+    this.baseDelayMs = clamp(delayMs, 0, MAX_DELAY_MS);
+    this.applyDelayMs();
+  }
+
+  setSyncTrimMs(delayMs) {
+    this.syncTrimMs = clamp(delayMs, 0, 120);
+    this.applyDelayMs();
+  }
+
+  resetSyncTrim() {
+    this.syncTrimMs = 0;
+    this.applyDelayMs();
   }
 
   setVolume(value) {
@@ -457,6 +475,11 @@ export class AudioEngine extends EventTarget {
     this.duration = 0;
     this.isPlaying = false;
     this.driftTimer = null;
+    this.syncState = {
+      locked: false,
+      maxDriftMs: 0,
+      lastEventAt: 0,
+    };
 
     for (const [id, path] of Object.entries(this.paths)) {
       path.setRole(id);
@@ -524,6 +547,7 @@ export class AudioEngine extends EventTarget {
 
     for (const path of Object.values(this.paths)) {
       path.loadStream(stream);
+      path.resetSyncTrim();
     }
 
     for (const track of stream.getTracks()) {
@@ -532,6 +556,7 @@ export class AudioEngine extends EventTarget {
 
     await Promise.all(this.getActivePaths().map((path) => path.resume()));
     this.isPlaying = true;
+    this.startDriftCorrection();
     this.dispatchEvent(new Event("liveinput"));
     this.dispatchEvent(new Event("playstate"));
   }
@@ -545,8 +570,10 @@ export class AudioEngine extends EventTarget {
     this.liveStream = null;
     for (const path of Object.values(this.paths)) {
       path.stopLiveInput();
+      path.resetSyncTrim();
     }
     this.isPlaying = false;
+    this.stopDriftCorrection();
     this.dispatchEvent(new Event("liveinput"));
     this.dispatchEvent(new Event("playstate"));
   }
@@ -555,6 +582,7 @@ export class AudioEngine extends EventTarget {
     if (this.liveStream) {
       await Promise.all(this.getActivePaths().map((path) => path.resume()));
       this.isPlaying = true;
+      this.startDriftCorrection();
       this.dispatchEvent(new Event("playstate"));
       return;
     }
@@ -602,6 +630,7 @@ export class AudioEngine extends EventTarget {
 
     this.pause();
     this.setCurrentTime(0);
+    this.resetSyncTrims();
     this.dispatchEvent(new Event("seek"));
   }
 
@@ -610,6 +639,7 @@ export class AudioEngine extends EventTarget {
     for (const path of Object.values(this.paths)) {
       path.setCurrentTime(safeTime);
     }
+    this.resetSyncTrims();
     this.dispatchEvent(new Event("seek"));
   }
 
@@ -809,27 +839,74 @@ export class AudioEngine extends EventTarget {
     );
   }
 
+  resetSyncTrims() {
+    for (const path of Object.values(this.paths)) {
+      path.resetSyncTrim();
+    }
+    this.syncState.locked = false;
+    this.syncState.maxDriftMs = 0;
+  }
+
+  publishSyncState(maxDriftMs) {
+    const now = performance.now();
+    this.syncState.maxDriftMs = maxDriftMs;
+    this.syncState.locked = maxDriftMs < 12;
+
+    if (now - this.syncState.lastEventAt < 900) {
+      return;
+    }
+
+    this.syncState.lastEventAt = now;
+    this.dispatchEvent(new CustomEvent("syncstate", {
+      detail: {
+        locked: this.syncState.locked,
+        maxDriftMs,
+      },
+    }));
+  }
+
   startDriftCorrection() {
     this.stopDriftCorrection();
+    this.resetSyncTrims();
     this.driftTimer = window.setInterval(() => {
       if (!this.isPlaying) {
         return;
       }
 
       const active = this.getActivePaths();
-      const reference = active[0];
-      if (!reference || reference.media.paused) {
+      if (this.liveStream || active.length < 2) {
+        this.publishSyncState(0);
         return;
       }
 
-      const refTime = reference.media.currentTime;
-      for (const path of active.slice(1)) {
-        const drift = path.media.currentTime - refTime;
-        if (Math.abs(drift) > 0.045) {
-          path.media.currentTime = refTime;
-        }
+      const playable = active.filter((path) => !path.media.paused && path.media.readyState > 0);
+      if (playable.length < 2) {
+        return;
       }
-    }, 300);
+
+      const times = playable.map((path) => path.media.currentTime);
+      const slowestTime = Math.min(...times);
+      const fastestTime = Math.max(...times);
+      const maxDriftMs = (fastestTime - slowestTime) * 1000;
+
+      // Large jumps are rare, but seeking one clock back is cleaner than letting a song flam.
+      if (maxDriftMs > 140) {
+        for (const path of playable) {
+          path.media.currentTime = slowestTime;
+        }
+        this.resetSyncTrims();
+        this.publishSyncState(maxDriftMs);
+        return;
+      }
+
+      for (const path of playable) {
+        const desiredTrimMs = clamp((path.media.currentTime - slowestTime) * 1000, 0, 90);
+        const nextTrimMs = path.syncTrimMs + (desiredTrimMs - path.syncTrimMs) * 0.42;
+        path.setSyncTrimMs(nextTrimMs);
+      }
+
+      this.publishSyncState(maxDriftMs);
+    }, 180);
   }
 
   stopDriftCorrection() {
@@ -837,5 +914,6 @@ export class AudioEngine extends EventTarget {
       window.clearInterval(this.driftTimer);
       this.driftTimer = null;
     }
+    this.resetSyncTrims();
   }
 }
