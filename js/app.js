@@ -6,7 +6,7 @@ import {
   formatHz,
   formatTime,
 } from "./constants.js";
-import { AudioEngine } from "./audio-engine.js?v=20260606-auto-perfect";
+import { AudioEngine } from "./audio-engine.js?v=20260606-precision-calibrate";
 import { DeviceManager } from "./device-manager.js";
 import { SpectrumVisualizer } from "./visualizer.js";
 import {
@@ -21,7 +21,7 @@ import {
   saveLastSession,
   savePreset,
 } from "./presets.js";
-import { runLatencyWizard, runMicrophoneCalibration } from "./calibration.js?v=20260606-auto-perfect";
+import { runLatencyWizard, runMicrophoneCalibration } from "./calibration.js?v=20260606-precision-calibrate";
 
 const $ = (id) => document.getElementById(id);
 const QUEUE_PREFS_KEY = "speaker-splitter-pro.queue-prefs.v1";
@@ -1487,9 +1487,14 @@ function wireSyncTools() {
 
   dom.autoCalibrateBtn.addEventListener("click", async () => {
     try {
-      await runMicrophoneCalibration(engine, calibrationCallbacks());
+      const result = await runMicrophoneCalibration(engine, calibrationCallbacks());
       updateSettingsUi();
-      setEngineStatus("Delay and level calibrated");
+      setEngineStatus(
+        result.verificationSpreadMs <= 8
+          ? "Precision calibrated"
+          : "Calibrated; run Sync Test",
+        result.verificationSpreadMs <= 8 ? "ok" : "warn",
+      );
       queueAutosave();
     } catch (error) {
       updateSettingsUi();

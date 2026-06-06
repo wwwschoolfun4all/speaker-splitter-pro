@@ -385,7 +385,13 @@ class SpeakerPath {
     }
   }
 
-  playClick({ gain = 0.75, startDelay = 0.08, toneHz = 1100, noiseAmount = 0.75 } = {}) {
+  playClick({
+    gain = 0.75,
+    startDelay = 0.08,
+    toneHz = 1100,
+    noiseAmount = 0.75,
+    bypassCrossover = false,
+  } = {}) {
     const sampleRate = this.context.sampleRate;
     const length = Math.floor(sampleRate * 0.075);
     const buffer = this.context.createBuffer(2, length, sampleRate);
@@ -404,7 +410,7 @@ class SpeakerPath {
     const clickGain = this.context.createGain();
     source.buffer = buffer;
     clickGain.gain.value = gain;
-    source.connect(clickGain).connect(this.inputGain);
+    source.connect(clickGain).connect(bypassCrossover ? this.delay : this.inputGain);
     source.start(this.context.currentTime + startDelay);
     return startDelay * 1000;
   }
