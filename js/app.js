@@ -506,6 +506,67 @@ function averageSpectrumBand(spectrum, analyser, lowHz, highHz) {
   return count ? sum / count / 255 : 0;
 }
 
+function analyzeCrossoverProfile({ bassEntry, vocalEntry, trebleEntry, settings, levels }) {
+  const crossover = settings.crossoverHz;
+  const bassBodyHigh = Math.max(95, Math.min(210, crossover * 0.95));
+  const edgeLow = Math.max(55, crossover * 0.68);
+  const edgeHigh = Math.min(620, crossover * 1.65);
+  const lowMidLow = Math.max(180, crossover * 1.08);
+
+  const subBand = averageSpectrumBand(bassEntry.spectrum, bassEntry.analyser, 38, 78);
+  const punchBand = averageSpectrumBand(bassEntry.spectrum, bassEntry.analyser, 78, bassBodyHigh);
+  const bassEdgeBand = averageSpectrumBand(bassEntry.spectrum, bassEntry.analyser, edgeLow, Math.min(500, crossover * 1.08));
+  const vocalEdgeBand = averageSpectrumBand(vocalEntry.spectrum, vocalEntry.analyser, Math.max(80, crossover * 0.9), edgeHigh);
+  const mudBand = averageSpectrumBand(vocalEntry.spectrum, vocalEntry.analyser, lowMidLow, 520);
+  const vocalBand = averageSpectrumBand(vocalEntry.spectrum, vocalEntry.analyser, 700, 3200);
+  const airBand = trebleEntry
+    ? averageSpectrumBand(trebleEntry.spectrum, trebleEntry.analyser, 5000, 12000)
+    : 0.35;
+
+  const bassLevel = levels.bass?.rms || 0;
+  const vocalLevel = (levels.vocal?.rms || levels.mid?.rms || 0);
+  const bassBody = subBand * 0.45 + punchBand * 0.4 + bassEdgeBand * 0.15;
+  const crossoverBody = bassEdgeBand * 0.55 + vocalEdgeBand * 0.45;
+  const vocalBody = vocalBand * 0.72 + vocalEdgeBand * 0.18 + airBand * 0.1;
+  const crossoverBalance = (bassEdgeBand + 0.035) / (vocalEdgeBand + 0.035);
+  const bassNeed = (vocalBody + 0.05) / (bassBody + 0.05);
+  const hot = Object.values(levels).some((level) => level.peak > 0.94);
+
+  return {
+    airBand,
+    bassBody,
+    bassEdgeBand,
+    bassLevel,
+    bassNeed,
+    crossoverBalance,
+    crossoverBody,
+    hot,
+    mudBand,
+    punchBand,
+    subBand,
+    vocalBand,
+    vocalBody,
+    vocalEdgeBand,
+    vocalLevel,
+  };
+}
+
+function getAutoDjStatus(profile) {
+  if (profile.hot) {
+    return "Protecting headroom";
+  }
+  if (profile.bassNeed > 1.55 || profile.bassEdgeBand < 0.2) {
+    return "Filling crossover";
+  }
+  if (profile.mudBand > 0.52 || profile.crossoverBalance > 1.65) {
+    return "Cleaning low mids";
+  }
+  if (profile.subBand < 0.18 && profile.vocalBody > 0.34) {
+    return "Lifting bass";
+  }
+  return "Auto balancing";
+}
+
 function runAutoDj() {
   if (!engine) {
     autoDjFrame = requestAnimationFrame(runAutoDj);
@@ -524,37 +585,45 @@ function runAutoDj() {
     const levels = engine.getMeterLevels();
 
     if (bassEntry && vocalEntry) {
-      const bassBand = averageSpectrumBand(bassEntry.spectrum, bassEntry.analyser, 45, 150);
-      const mudBand = averageSpectrumBand(bassEntry.spectrum, bassEntry.analyser, 180, 420);
-      const vocalBand = averageSpectrumBand(vocalEntry.spectrum, vocalEntry.analyser, 700, 3200);
-      const airBand = trebleEntry
-        ? averageSpectrumBand(trebleEntry.spectrum, trebleEntry.analyser, 5000, 12000)
-        : 0.35;
-      const bassLevel = levels.bass?.rms || 0;
-      const vocalLevel = (levels.vocal?.rms || levels.mid?.rms || 0);
-      const hot = Object.values(levels).some((level) => level.peak > 0.94);
+      const profile = analyzeCrossoverProfile({
+        bassEntry,
+        vocalEntry,
+        trebleEntry,
+        settings,
+        levels,
+      });
 
       const dj = settings.dj;
       let nextBlend = dj.speakerBlend;
       let nextEnergy = dj.energy;
       let nextSweep = dj.filterSweep;
 
-      if (bassLevel > vocalLevel * 1.75 || bassBand > vocalBand * 2.05 || mudBand > 0.62) {
-        nextBlend = Math.min(48, nextBlend + 3);
-      } else if (vocalLevel > bassLevel * 1.18 || bassBand < 0.34) {
-        nextBlend = Math.max(-58, nextBlend - 5);
+      if (profile.hot) {
+        nextBlend = Math.min(52, nextBlend + 2);
+      } else if (profile.mudBand > 0.58 || profile.crossoverBalance > 1.85) {
+        nextBlend = Math.min(52, nextBlend + 4);
+      } else if (profile.bassNeed > 1.45 || profile.bassEdgeBand < 0.22) {
+        nextBlend = Math.max(-64, nextBlend - 5);
+      } else if (profile.vocalLevel > profile.bassLevel * 1.28 && profile.subBand < 0.28) {
+        nextBlend = Math.max(-58, nextBlend - 4);
+      } else if (profile.bassLevel > profile.vocalLevel * 1.8 || profile.bassBody > profile.vocalBody * 1.9) {
+        nextBlend = Math.min(46, nextBlend + 3);
       }
 
-      if (hot) {
+      if (profile.hot) {
         nextEnergy = Math.max(0.36, nextEnergy - 0.04);
-      } else if (bassLevel < 0.34 || (bassBand < 0.36 && vocalLevel < 0.62)) {
+      } else if (profile.bassNeed > 1.38 || profile.crossoverBody < 0.28) {
         nextEnergy = Math.min(0.92, nextEnergy + 0.035);
+      } else if (profile.mudBand > 0.62 && profile.vocalBody < 0.34) {
+        nextEnergy = Math.max(0.42, nextEnergy - 0.025);
       }
 
-      if (airBand < 0.18 && vocalBand > 0.22) {
+      if (profile.bassNeed > 1.52 && profile.mudBand < 0.48) {
+        nextSweep = Math.min(38, nextSweep + 4);
+      } else if (profile.mudBand > 0.5 || profile.crossoverBalance > 1.72 || profile.hot) {
+        nextSweep = Math.max(-34, nextSweep - 4);
+      } else if (profile.airBand < 0.18 && profile.vocalBand > 0.22) {
         nextSweep = Math.min(32, nextSweep + 2);
-      } else if (mudBand > 0.5 || hot) {
-        nextSweep = Math.max(-28, nextSweep - 3);
       }
 
       engine.setDjControls({
@@ -563,7 +632,7 @@ function runAutoDj() {
         filterSweep: nextSweep,
       });
       renderDjControls();
-      dom.autoDjStatus.textContent = hot ? "Protecting headroom" : bassBand < 0.34 ? "Lifting bass" : "Auto balancing";
+      dom.autoDjStatus.textContent = getAutoDjStatus(profile);
       queueAutosave();
     }
   }
