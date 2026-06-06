@@ -6,7 +6,7 @@ import {
   formatHz,
   formatTime,
 } from "./constants.js";
-import { AudioEngine } from "./audio-engine.js";
+import { AudioEngine } from "./audio-engine.js?v=20260606-auto-perfect";
 import { DeviceManager } from "./device-manager.js";
 import { SpectrumVisualizer } from "./visualizer.js";
 import {
@@ -21,7 +21,7 @@ import {
   saveLastSession,
   savePreset,
 } from "./presets.js";
-import { runLatencyWizard, runMicrophoneCalibration } from "./calibration.js";
+import { runLatencyWizard, runMicrophoneCalibration } from "./calibration.js?v=20260606-auto-perfect";
 
 const $ = (id) => document.getElementById(id);
 const QUEUE_PREFS_KEY = "speaker-splitter-pro.queue-prefs.v1";
@@ -311,10 +311,10 @@ function applyDjOutput() {
   const sweep = dj.filterSweep / 100;
   const activeIds = activeUiSpeakerIds();
 
-  const bassBase = dj.bassKill ? 0 : 1 - Math.max(0, blend) * 0.75;
-  const vocalBase = dj.vocalKill ? 0 : 1 + Math.max(0, blend) * 0.28;
-  const bassEnergy = 0.72 + energy * 0.34;
-  const vocalEnergy = 0.86 + energy * 0.2;
+  const bassBase = dj.bassKill ? 0 : 1 + Math.max(0, -blend) * 0.38 - Math.max(0, blend) * 0.58;
+  const vocalBase = dj.vocalKill ? 0 : 1 + Math.max(0, blend) * 0.28 - Math.max(0, -blend) * 0.16;
+  const bassEnergy = 0.88 + energy * 0.36;
+  const vocalEnergy = 0.88 + energy * 0.18;
 
   engine.setSpeakerDjGain("bass", bassBase * bassEnergy);
   engine.setSpeakerDjGain("vocal", activeIds.includes("vocal") ? vocalBase * vocalEnergy : 0);
@@ -539,22 +539,22 @@ function runAutoDj() {
       let nextEnergy = dj.energy;
       let nextSweep = dj.filterSweep;
 
-      if (bassLevel > vocalLevel * 1.55 || bassBand > vocalBand * 1.7 || mudBand > 0.54) {
-        nextBlend = Math.min(55, nextBlend + 4);
-      } else if (vocalLevel > bassLevel * 1.45 && bassBand < 0.25) {
-        nextBlend = Math.max(-35, nextBlend - 3);
+      if (bassLevel > vocalLevel * 1.75 || bassBand > vocalBand * 2.05 || mudBand > 0.62) {
+        nextBlend = Math.min(48, nextBlend + 3);
+      } else if (vocalLevel > bassLevel * 1.18 || bassBand < 0.34) {
+        nextBlend = Math.max(-58, nextBlend - 5);
       }
 
       if (hot) {
-        nextEnergy = Math.max(0.28, nextEnergy - 0.05);
-      } else if (bassLevel < 0.28 && vocalLevel < 0.34) {
-        nextEnergy = Math.min(0.82, nextEnergy + 0.025);
+        nextEnergy = Math.max(0.36, nextEnergy - 0.04);
+      } else if (bassLevel < 0.34 || (bassBand < 0.36 && vocalLevel < 0.62)) {
+        nextEnergy = Math.min(0.92, nextEnergy + 0.035);
       }
 
       if (airBand < 0.18 && vocalBand > 0.22) {
-        nextSweep = Math.min(35, nextSweep + 3);
+        nextSweep = Math.min(32, nextSweep + 2);
       } else if (mudBand > 0.5 || hot) {
-        nextSweep = Math.max(-35, nextSweep - 4);
+        nextSweep = Math.max(-28, nextSweep - 3);
       }
 
       engine.setDjControls({
@@ -563,7 +563,7 @@ function runAutoDj() {
         filterSweep: nextSweep,
       });
       renderDjControls();
-      dom.autoDjStatus.textContent = hot ? "Protecting headroom" : "Auto balancing";
+      dom.autoDjStatus.textContent = hot ? "Protecting headroom" : bassBand < 0.34 ? "Lifting bass" : "Auto balancing";
       queueAutosave();
     }
   }
@@ -1489,7 +1489,8 @@ function wireSyncTools() {
     try {
       await runMicrophoneCalibration(engine, calibrationCallbacks());
       updateSettingsUi();
-      setEngineStatus("Delay calibrated");
+      setEngineStatus("Delay and level calibrated");
+      queueAutosave();
     } catch (error) {
       updateSettingsUi();
       setEngineStatus(error.message || "Calibration failed", "error");

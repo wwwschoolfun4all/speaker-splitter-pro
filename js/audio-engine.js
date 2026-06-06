@@ -385,7 +385,7 @@ class SpeakerPath {
     }
   }
 
-  playClick({ gain = 0.75, startDelay = 0.08 } = {}) {
+  playClick({ gain = 0.75, startDelay = 0.08, toneHz = 1100, noiseAmount = 0.75 } = {}) {
     const sampleRate = this.context.sampleRate;
     const length = Math.floor(sampleRate * 0.075);
     const buffer = this.context.createBuffer(2, length, sampleRate);
@@ -394,8 +394,8 @@ class SpeakerPath {
       const data = buffer.getChannelData(channel);
       for (let i = 0; i < data.length; i += 1) {
         const env = Math.exp(-i / (sampleRate * 0.006));
-        const tone = Math.sin((2 * Math.PI * 1100 * i) / sampleRate) * 0.25;
-        const noise = (Math.random() * 2 - 1) * 0.75;
+        const tone = Math.sin((2 * Math.PI * toneHz * i) / sampleRate) * 0.34;
+        const noise = (Math.random() * 2 - 1) * noiseAmount;
         data[i] = (tone + noise) * env;
       }
     }

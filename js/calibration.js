@@ -32,7 +32,10 @@ async function waitForImpulse(analyser, buffer, threshold, expectedStartMs, time
     const now = performance.now();
 
     if (now >= expectedStartMs && peak >= threshold) {
-      return now - expectedStartMs;
+      return {
+        latencyMs: now - expectedStartMs,
+        peak,
+      };
     }
 
     await sleep(8);
@@ -53,6 +56,9 @@ export async function runMicrophoneCalibration(engine, callbacks = {}) {
 
   const previousDelays = Object.fromEntries(
     activeIds.map((id) => [id, engine.getSettings().speakers[id].delayMs]),
+  );
+  const previousVolumes = Object.fromEntries(
+    activeIds.map((id) => [id, engine.getSettings().speakers[id].volume]),
   );
 
   let stream = null;
@@ -89,6 +95,7 @@ export async function runMicrophoneCalibration(engine, callbacks = {}) {
     const threshold = Math.max(0.055, noiseFloor * 4.5);
 
     const latencies = {};
+    const peaks = {};
     for (let index = 0; index < activeIds.length; index += 1) {
       const id = activeIds[index];
       callbacks.status?.(`Listening to ${id}`);
@@ -97,15 +104,19 @@ export async function runMicrophoneCalibration(engine, callbacks = {}) {
       await sleep(260);
       const firedAt = performance.now();
       const startDelayMs = await engine.playSpeakerPing(id, {
-        gain: 0.95,
+        gain: id === "bass" ? 1.35 : 0.95,
         startDelay: 0.12,
+        toneHz: id === "bass" ? 125 : 1100,
+        noiseAmount: id === "bass" ? 1.05 : 0.75,
       });
-      latencies[id] = await waitForImpulse(
+      const result = await waitForImpulse(
         analyser,
         buffer,
         threshold,
         firedAt + startDelayMs,
       );
+      latencies[id] = result.latencyMs;
+      peaks[id] = result.peak;
       await sleep(280);
     }
 
@@ -115,18 +126,37 @@ export async function runMicrophoneCalibration(engine, callbacks = {}) {
       engine.setSpeakerDelay(id, compensation);
     }
 
+    const sortedPeaks = Object.values(peaks).filter(Number.isFinite).sort((a, b) => a - b);
+    const medianPeak = sortedPeaks[Math.floor(sortedPeaks.length / 2)] || sortedPeaks[0] || 0.12;
+    for (const id of activeIds) {
+      const currentVolume = engine.getSettings().speakers[id].volume;
+      const speakerPeak = Math.max(peaks[id] || medianPeak, 0.02);
+      const targetPeak = id === "bass" ? medianPeak * 1.18 : medianPeak;
+      const ratio = clamp(targetPeak / speakerPeak, 0.72, id === "bass" ? 1.28 : 1.16);
+      const maxVolume = id === "bass" ? 1 : 1.5;
+      const minVolume = id === "bass" ? 0.72 : 0.55;
+      engine.setSpeakerVolume(id, clamp(currentVolume * ratio, minVolume, maxVolume));
+    }
+
     callbacks.progress?.(100);
-    callbacks.status?.("Calibration applied");
+    callbacks.status?.("Calibration applied: delay and level");
     return {
       latencies,
+      peaks,
       delays: Object.fromEntries(
         activeIds.map((id) => [id, engine.getSettings().speakers[id].delayMs]),
+      ),
+      volumes: Object.fromEntries(
+        activeIds.map((id) => [id, engine.getSettings().speakers[id].volume]),
       ),
     };
   } catch (error) {
     // Restore user settings if the permission prompt is denied or the room is too noisy.
     for (const [id, delay] of Object.entries(previousDelays)) {
       engine.setSpeakerDelay(id, delay);
+    }
+    for (const [id, volume] of Object.entries(previousVolumes)) {
+      engine.setSpeakerVolume(id, volume);
     }
     callbacks.status?.("Calibration failed");
     throw error;
