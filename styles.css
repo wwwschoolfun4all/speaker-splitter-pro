@@ -576,7 +576,7 @@ output {
 
 .speaker-strip {
   display: grid;
-  grid-template-columns: minmax(170px, 0.8fr) minmax(180px, 1.2fr) minmax(180px, 1fr) minmax(180px, 1.1fr);
+  grid-template-columns: minmax(180px, 0.9fr) minmax(240px, 1.1fr);
   align-items: center;
   gap: 12px;
   border: 1px solid var(--line-soft);
@@ -586,6 +586,10 @@ output {
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
     #10161b;
   box-shadow: var(--shadow-soft);
+}
+
+.speaker-strip .range-field {
+  grid-template-columns: 86px minmax(160px, 1fr) 74px;
 }
 
 .speaker-strip__title strong,
@@ -1068,13 +1072,6 @@ progress {
     grid-template-columns: 1fr;
   }
 
-  .speaker-strip {
-    grid-template-columns: minmax(180px, 0.9fr) minmax(240px, 1.1fr);
-  }
-
-  .speaker-strip .range-field {
-    grid-template-columns: 86px minmax(160px, 1fr) 74px;
-  }
 }
 
 @media (max-width: 1120px) {
