@@ -1067,6 +1067,14 @@ progress {
   .control-grid {
     grid-template-columns: 1fr;
   }
+
+  .speaker-strip {
+    grid-template-columns: minmax(180px, 0.9fr) minmax(240px, 1.1fr);
+  }
+
+  .speaker-strip .range-field {
+    grid-template-columns: 86px minmax(160px, 1fr) 74px;
+  }
 }
 
 @media (max-width: 1120px) {
@@ -1078,10 +1086,6 @@ progress {
   .transport-buttons,
   .time-readout {
     width: 100%;
-  }
-
-  .speaker-strip {
-    grid-template-columns: 1fr 1fr;
   }
 
   .dj-grid {
