@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#101316">
     <title>Speaker Splitter Pro</title>
-    <link rel="stylesheet" href="./styles.css?v=20260606-spotify-helper">
+    <link rel="stylesheet" href="./styles.css?v=20260606-spotify-embed">
   </head>
   <body>
     <div class="app-shell">
@@ -62,9 +62,17 @@
                 <span>Spotify Link</span>
                 <input id="spotifyLinkInput" type="text" placeholder="https://open.spotify.com/track/... or playlist/...">
               </label>
+              <button id="embedSpotifyLinkBtn" class="button button--small" type="button">Embed Player</button>
               <button id="openSpotifyLinkBtn" class="button button--small" type="button">Open Link</button>
               <button id="captureSpotifyBtn" class="button button--small button--primary" type="button">Capture Link Audio</button>
               <span id="spotifyLinkStatus" class="link-capture__status">Streaming capture only</span>
+            </div>
+            <div id="spotifyEmbedPanel" class="spotify-embed is-hidden" aria-label="Spotify embedded player">
+              <iframe
+                id="spotifyEmbedFrame"
+                title="Spotify embedded player"
+                allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                loading="lazy"></iframe>
             </div>
             <div class="source-warning">
               <strong>Double audio fix</strong>
@@ -391,6 +399,6 @@
       </main>
     </div>
 
-    <script type="module" src="./js/app.js?v=20260606-spotify-helper"></script>
+    <script type="module" src="./js/app.js?v=20260606-spotify-embed"></script>
   </body>
 </html>

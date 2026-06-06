@@ -243,7 +243,7 @@ h2 {
 
 .link-capture {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto auto minmax(150px, auto);
+  grid-template-columns: minmax(260px, 1fr) auto auto auto minmax(150px, auto);
   align-items: end;
   gap: 10px;
   max-width: 980px;
@@ -273,6 +273,27 @@ h2 {
 
 .link-capture__status.is-warn {
   color: var(--amber);
+}
+
+.spotify-embed {
+  max-width: 980px;
+  margin-top: 12px;
+  border: 1px solid rgba(50, 199, 197, 0.24);
+  border-radius: var(--radius);
+  padding: 10px;
+  background:
+    linear-gradient(135deg, rgba(50, 199, 197, 0.08), transparent 44%),
+    #0b1014;
+  box-shadow: var(--shadow-soft);
+}
+
+.spotify-embed iframe {
+  width: 100%;
+  height: 352px;
+  display: block;
+  border: 0;
+  border-radius: 8px;
+  background: #0b1014;
 }
 
 .source-warning {

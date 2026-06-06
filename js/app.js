@@ -40,9 +40,12 @@ const dom = {
   nextTrackLabel: $("nextTrackLabel"),
   queueList: $("queueList"),
   spotifyLinkInput: $("spotifyLinkInput"),
+  embedSpotifyLinkBtn: $("embedSpotifyLinkBtn"),
   openSpotifyLinkBtn: $("openSpotifyLinkBtn"),
   captureSpotifyBtn: $("captureSpotifyBtn"),
   spotifyLinkStatus: $("spotifyLinkStatus"),
+  spotifyEmbedPanel: $("spotifyEmbedPanel"),
+  spotifyEmbedFrame: $("spotifyEmbedFrame"),
   captureAudioBtn: $("captureAudioBtn"),
   stopCaptureBtn: $("stopCaptureBtn"),
   fileName: $("fileName"),
@@ -955,7 +958,7 @@ function parseSpotifyLink(value) {
 
   if (raw.startsWith("spotify:")) {
     const parts = raw.split(":");
-    if (parts.length >= 3) {
+    if (parts.length >= 3 && isEmbeddableSpotifyType(parts[1])) {
       return `https://open.spotify.com/${encodeURIComponent(parts[1])}/${encodeURIComponent(parts[2])}`;
     }
   }
@@ -975,6 +978,41 @@ function parseSpotifyLink(value) {
   return url.toString();
 }
 
+function isEmbeddableSpotifyType(type) {
+  return ["track", "album", "playlist", "artist", "show", "episode"].includes(type);
+}
+
+function getSpotifyEmbedUrl(value) {
+  const spotifyUrl = new URL(parseSpotifyLink(value));
+  const segments = spotifyUrl.pathname.split("/").filter(Boolean);
+  let typeIndex = segments.findIndex((segment) => isEmbeddableSpotifyType(segment));
+
+  // Older playlist links can look like /user/{name}/playlist/{id}.
+  if (typeIndex < 0 && segments[0] === "user") {
+    typeIndex = segments.findIndex((segment) => segment === "playlist");
+  }
+
+  const type = segments[typeIndex];
+  const id = segments[typeIndex + 1];
+  if (!isEmbeddableSpotifyType(type) || !id) {
+    throw new Error("Use a Spotify track, album, artist, show, episode, or playlist link.");
+  }
+
+  return `https://open.spotify.com/embed/${encodeURIComponent(type)}/${encodeURIComponent(id)}?utm_source=speaker_splitter_pro&theme=0`;
+}
+
+function embedSpotifyLink() {
+  try {
+    const embedUrl = getSpotifyEmbedUrl(dom.spotifyLinkInput.value);
+    dom.spotifyEmbedFrame.src = embedUrl;
+    dom.spotifyEmbedPanel.classList.remove("is-hidden");
+    setSpotifyLinkStatus("Embedded player ready", "ready");
+    setEngineStatus("Play Spotify, then capture audio", "warn");
+  } catch (error) {
+    setSpotifyLinkStatus(error.message || "Invalid link", "warn");
+  }
+}
+
 function openSpotifyLink() {
   try {
     const url = parseSpotifyLink(dom.spotifyLinkInput.value);
@@ -988,8 +1026,11 @@ function openSpotifyLink() {
 
 async function captureSpotifyLinkAudio() {
   try {
+    if (!dom.spotifyEmbedFrame.src) {
+      embedSpotifyLink();
+    }
     parseSpotifyLink(dom.spotifyLinkInput.value);
-    setSpotifyLinkStatus("Choose the Spotify tab with audio", "ready");
+    setSpotifyLinkStatus("Choose this tab or Spotify tab", "ready");
   } catch (error) {
     setSpotifyLinkStatus(error.message || "Invalid link", "warn");
   }
@@ -1042,12 +1083,13 @@ function stopLiveAudio() {
 function wireDropZone() {
   dom.chooseFileBtn.addEventListener("click", () => dom.fileInput.click());
   dom.captureAudioBtn.addEventListener("click", captureLiveAudio);
+  dom.embedSpotifyLinkBtn.addEventListener("click", embedSpotifyLink);
   dom.openSpotifyLinkBtn.addEventListener("click", openSpotifyLink);
   dom.captureSpotifyBtn.addEventListener("click", captureSpotifyLinkAudio);
   dom.spotifyLinkInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      openSpotifyLink();
+      embedSpotifyLink();
     }
   });
   dom.stopCaptureBtn.addEventListener("click", stopLiveAudio);
