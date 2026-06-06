@@ -39,6 +39,10 @@ const dom = {
   clearQueueBtn: $("clearQueueBtn"),
   nextTrackLabel: $("nextTrackLabel"),
   queueList: $("queueList"),
+  spotifyLinkInput: $("spotifyLinkInput"),
+  openSpotifyLinkBtn: $("openSpotifyLinkBtn"),
+  captureSpotifyBtn: $("captureSpotifyBtn"),
+  spotifyLinkStatus: $("spotifyLinkStatus"),
   captureAudioBtn: $("captureAudioBtn"),
   stopCaptureBtn: $("stopCaptureBtn"),
   fileName: $("fileName"),
@@ -933,6 +937,65 @@ function clearQueue() {
   }
 }
 
+function setSpotifyLinkStatus(message, tone = "ready") {
+  if (!dom.spotifyLinkStatus) {
+    return;
+  }
+
+  dom.spotifyLinkStatus.textContent = message;
+  dom.spotifyLinkStatus.classList.toggle("is-ready", tone === "ready");
+  dom.spotifyLinkStatus.classList.toggle("is-warn", tone === "warn");
+}
+
+function parseSpotifyLink(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    throw new Error("Paste a Spotify track, album, or playlist link first.");
+  }
+
+  if (raw.startsWith("spotify:")) {
+    const parts = raw.split(":");
+    if (parts.length >= 3) {
+      return `https://open.spotify.com/${encodeURIComponent(parts[1])}/${encodeURIComponent(parts[2])}`;
+    }
+  }
+
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("That does not look like a Spotify link.");
+  }
+
+  const allowedHosts = new Set(["open.spotify.com", "play.spotify.com"]);
+  if (!allowedHosts.has(url.hostname)) {
+    throw new Error("Use an open.spotify.com link.");
+  }
+
+  return url.toString();
+}
+
+function openSpotifyLink() {
+  try {
+    const url = parseSpotifyLink(dom.spotifyLinkInput.value);
+    window.open(url, "_blank", "noopener,noreferrer");
+    setSpotifyLinkStatus("Opened. Capture that tab.", "ready");
+    setEngineStatus("Open Spotify, then capture tab audio", "warn");
+  } catch (error) {
+    setSpotifyLinkStatus(error.message || "Invalid link", "warn");
+  }
+}
+
+async function captureSpotifyLinkAudio() {
+  try {
+    parseSpotifyLink(dom.spotifyLinkInput.value);
+    setSpotifyLinkStatus("Choose the Spotify tab with audio", "ready");
+  } catch (error) {
+    setSpotifyLinkStatus(error.message || "Invalid link", "warn");
+  }
+  await captureLiveAudio();
+}
+
 async function captureLiveAudio() {
   if (!navigator.mediaDevices?.getDisplayMedia) {
     setEngineStatus("Live capture unsupported", "error");
@@ -979,6 +1042,14 @@ function stopLiveAudio() {
 function wireDropZone() {
   dom.chooseFileBtn.addEventListener("click", () => dom.fileInput.click());
   dom.captureAudioBtn.addEventListener("click", captureLiveAudio);
+  dom.openSpotifyLinkBtn.addEventListener("click", openSpotifyLink);
+  dom.captureSpotifyBtn.addEventListener("click", captureSpotifyLinkAudio);
+  dom.spotifyLinkInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      openSpotifyLink();
+    }
+  });
   dom.stopCaptureBtn.addEventListener("click", stopLiveAudio);
   dom.dropZone.addEventListener("click", (event) => {
     if (event.target !== dom.chooseFileBtn) {

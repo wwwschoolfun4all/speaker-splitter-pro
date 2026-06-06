@@ -241,6 +241,40 @@ h2 {
   margin: 8px 0 0;
 }
 
+.link-capture {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto minmax(150px, auto);
+  align-items: end;
+  gap: 10px;
+  max-width: 980px;
+  margin-top: 14px;
+}
+
+.link-capture__status {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  padding: 0 12px;
+  color: var(--muted);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+    var(--panel-soft);
+  font-size: 0.84rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.link-capture__status.is-ready {
+  color: var(--accent-strong);
+}
+
+.link-capture__status.is-warn {
+  color: var(--amber);
+}
+
 .source-warning {
   display: grid;
   gap: 4px;
@@ -1076,6 +1110,7 @@ progress {
 
 @media (max-width: 1120px) {
   .transport-panel,
+  .link-capture,
   .preset-controls {
     grid-template-columns: 1fr;
   }

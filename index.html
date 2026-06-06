@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#101316">
     <title>Speaker Splitter Pro</title>
-    <link rel="stylesheet" href="./styles.css?v=20260606-speaker-grid">
+    <link rel="stylesheet" href="./styles.css?v=20260606-spotify-helper">
   </head>
   <body>
     <div class="app-shell">
@@ -57,6 +57,15 @@
           <div>
             <h2>Live Input</h2>
             <p class="panel-hint">Capture Spotify, YouTube, or another app/tab with audio, then route it through the same speaker split.</p>
+            <div class="link-capture">
+              <label>
+                <span>Spotify Link</span>
+                <input id="spotifyLinkInput" type="text" placeholder="https://open.spotify.com/track/... or playlist/...">
+              </label>
+              <button id="openSpotifyLinkBtn" class="button button--small" type="button">Open Link</button>
+              <button id="captureSpotifyBtn" class="button button--small button--primary" type="button">Capture Link Audio</button>
+              <span id="spotifyLinkStatus" class="link-capture__status">Streaming capture only</span>
+            </div>
             <div class="source-warning">
               <strong>Double audio fix</strong>
               <span>Do not leave Spotify's normal output on the same Bluetooth speakers. Route Spotify to an unused/virtual output, or use an audio file in this app. Browsers cannot silence another app's direct speaker output.</span>
@@ -382,6 +391,6 @@
       </main>
     </div>
 
-    <script type="module" src="./js/app.js?v=20260605-dj-decks"></script>
+    <script type="module" src="./js/app.js?v=20260606-spotify-helper"></script>
   </body>
 </html>
