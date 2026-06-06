@@ -66,6 +66,7 @@ export function createDefaultSettings() {
     masterVolume: 1,
     limiterEnabled: true,
     autoDjEnabled: false,
+    liveMicSyncEnabled: false,
     dj: {
       speakerBlend: 0,
       energy: 0.5,
@@ -110,6 +111,7 @@ export function mergeSettings(partial) {
   next.masterVolume = clamp(next.masterVolume, 0, 1.5);
   next.limiterEnabled = next.limiterEnabled !== false;
   next.autoDjEnabled = Boolean(next.autoDjEnabled);
+  next.liveMicSyncEnabled = Boolean(next.liveMicSyncEnabled);
   next.dj = {
     ...base.dj,
     ...((partial && partial.dj) || {}),

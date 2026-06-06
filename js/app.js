@@ -5,8 +5,8 @@ import {
   SPEAKER_IDS,
   formatHz,
   formatTime,
-} from "./constants.js";
-import { AudioEngine } from "./audio-engine.js?v=20260606-continuous-sync";
+} from "./constants.js?v=20260606-live-mic-sync";
+import { AudioEngine } from "./audio-engine.js?v=20260606-live-mic-sync";
 import { DeviceManager } from "./device-manager.js?v=20260606-all-devices";
 import { SpectrumVisualizer } from "./visualizer.js";
 import {
@@ -20,8 +20,8 @@ import {
   parsePresetFile,
   saveLastSession,
   savePreset,
-} from "./presets.js?v=20260606-all-devices";
-import { runLatencyWizard, runMicrophoneCalibration } from "./calibration.js?v=20260606-precision-calibrate";
+} from "./presets.js?v=20260606-live-mic-sync";
+import { LiveMicSync, runLatencyWizard, runMicrophoneCalibration } from "./calibration.js?v=20260606-live-mic-sync";
 
 const $ = (id) => document.getElementById(id);
 const QUEUE_PREFS_KEY = "speaker-splitter-pro.queue-prefs.v1";
@@ -89,6 +89,7 @@ const dom = {
   syncTestBtn: $("syncTestBtn"),
   latencyWizardBtn: $("latencyWizardBtn"),
   autoCalibrateBtn: $("autoCalibrateBtn"),
+  liveMicSyncToggle: $("liveMicSyncToggle"),
   calibrationPanel: $("calibrationPanel"),
   calibrationStatus: $("calibrationStatus"),
   calibrationProgress: $("calibrationProgress"),
@@ -157,6 +158,7 @@ let restoringSession = false;
 let autoDjFrame = null;
 let autoDjLastRun = 0;
 let djBaseCrossoverHz = 160;
+let liveMicSync = null;
 let playlist = [];
 let currentTrackIndex = -1;
 let currentTrackId = null;
@@ -405,6 +407,7 @@ function updateSettingsUi() {
   dom.trebleSplitValue.textContent = `${Math.round(settings.trebleSplitHz)} Hz`;
   dom.masterVolume.value = settings.masterVolume;
   dom.limiterToggle.checked = settings.limiterEnabled;
+  dom.liveMicSyncToggle.checked = settings.liveMicSyncEnabled;
   dom.clipStatus.textContent = settings.limiterEnabled ? "Limiter ready" : "Limiter off";
 
   for (const id of SPEAKER_IDS) {
@@ -1560,6 +1563,54 @@ function calibrationCallbacks() {
   };
 }
 
+function liveMicSyncCallbacks() {
+  setCalibrationVisible(true);
+  return {
+    status(message) {
+      dom.calibrationStatus.textContent = message;
+      setEngineStatus(message, message.includes("locked") || message.includes("on") ? "ok" : "warn");
+    },
+    progress(value) {
+      dom.calibrationProgress.value = value;
+    },
+    result() {
+      updateSettingsUi();
+      queueAutosave();
+    },
+  };
+}
+
+async function setLiveMicSyncEnabled(enabled) {
+  if (!engine) {
+    return;
+  }
+
+  if (enabled) {
+    liveMicSync ||= new LiveMicSync(engine, liveMicSyncCallbacks());
+    try {
+      await liveMicSync.start();
+      engine.setLiveMicSyncEnabled(true);
+      dom.liveMicSyncToggle.checked = true;
+      queueAutosave();
+    } catch (error) {
+      await liveMicSync?.stop();
+      liveMicSync = null;
+      engine.setLiveMicSyncEnabled(false);
+      dom.liveMicSyncToggle.checked = false;
+      setEngineStatus(error.message || "Live mic sync failed", "error");
+      queueAutosave();
+    }
+    return;
+  }
+
+  await liveMicSync?.stop();
+  liveMicSync = null;
+  engine.setLiveMicSyncEnabled(false);
+  dom.liveMicSyncToggle.checked = false;
+  setEngineStatus(engine.isPlaying ? "Playing" : "Live mic sync off", engine.isPlaying ? "ok" : "warn");
+  queueAutosave();
+}
+
 function wireSyncTools() {
   dom.syncTestBtn.addEventListener("click", async () => {
     try {
@@ -1580,7 +1631,11 @@ function wireSyncTools() {
   });
 
   dom.autoCalibrateBtn.addEventListener("click", async () => {
+    const restoreLiveSync = Boolean(engine.getSettings().liveMicSyncEnabled);
     try {
+      if (restoreLiveSync) {
+        await setLiveMicSyncEnabled(false);
+      }
       const result = await runMicrophoneCalibration(engine, calibrationCallbacks());
       updateSettingsUi();
       setEngineStatus(
@@ -1593,7 +1648,15 @@ function wireSyncTools() {
     } catch (error) {
       updateSettingsUi();
       setEngineStatus(error.message || "Calibration failed", "error");
+    } finally {
+      if (restoreLiveSync) {
+        await setLiveMicSyncEnabled(true);
+      }
     }
+  });
+
+  dom.liveMicSyncToggle.addEventListener("change", () => {
+    setLiveMicSyncEnabled(dom.liveMicSyncToggle.checked);
   });
 }
 
@@ -1819,9 +1882,15 @@ async function init() {
     restoringSession = true;
     deviceManager.rememberDevices(loadLastSessionDevices());
     engine.applySettings(lastSession);
+    if (engine.getSettings().liveMicSyncEnabled) {
+      engine.setLiveMicSyncEnabled(false);
+      setPresetStatus("Last session restored; enable Live mic sync when ready");
+    }
     djBaseCrossoverHz = engine.getSettings().crossoverHz;
     restoringSession = false;
-    setPresetStatus("Last session restored");
+    if (!dom.presetStatus.textContent.includes("Live mic sync")) {
+      setPresetStatus("Last session restored");
+    }
   }
 
   updateSettingsUi();

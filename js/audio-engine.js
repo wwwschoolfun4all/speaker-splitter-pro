@@ -9,7 +9,7 @@ import {
   clamp,
   createDefaultSettings,
   mergeSettings,
-} from "./constants.js";
+} from "./constants.js?v=20260606-live-mic-sync";
 
 const AudioCtor = window.AudioContext || window.webkitAudioContext;
 const WORKLET_URL = new URL("./center-vocal-worklet.js", import.meta.url);
@@ -730,6 +730,11 @@ export class AudioEngine extends EventTarget {
 
   setAutoDjEnabled(enabled) {
     this.settings.autoDjEnabled = Boolean(enabled);
+    this.dispatchEvent(new Event("settingschange"));
+  }
+
+  setLiveMicSyncEnabled(enabled) {
+    this.settings.liveMicSyncEnabled = Boolean(enabled);
     this.dispatchEvent(new Event("settingschange"));
   }
 

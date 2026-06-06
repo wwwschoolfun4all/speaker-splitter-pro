@@ -1,9 +1,11 @@
-import { MAX_DELAY_MS, clamp } from "./constants.js";
+import { MAX_DELAY_MS, clamp } from "./constants.js?v=20260606-live-mic-sync";
 
 const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const CALIBRATION_TRIALS = 5;
 const MIN_VALID_TRIALS = 3;
 const MAX_LATENCY_SPREAD_MS = 18;
+const LIVE_SYNC_INTERVAL_MS = 9000;
+const LIVE_SYNC_MAX_ADJUST_MS = 6;
 
 function getBufferStats(buffer) {
   let peak = 0;
@@ -392,4 +394,156 @@ export async function runLatencyWizard(engine, callbacks = {}) {
 
   callbacks.progress?.(100);
   callbacks.status?.("Adjust delays");
+}
+
+export class LiveMicSync {
+  constructor(engine, callbacks = {}) {
+    this.engine = engine;
+    this.callbacks = callbacks;
+    this.stream = null;
+    this.context = null;
+    this.analyser = null;
+    this.buffer = null;
+    this.timer = null;
+    this.running = false;
+    this.inCycle = false;
+    this.noiseProfile = { peak: 0.04, rms: 0.012 };
+  }
+
+  async start() {
+    if (this.running) {
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Live mic sync is not supported in this browser.");
+    }
+
+    this.callbacks.status?.("Requesting microphone");
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
+
+    this.context = new (window.AudioContext || window.webkitAudioContext)({
+      latencyHint: "interactive",
+    });
+    const source = this.context.createMediaStreamSource(this.stream);
+    this.analyser = this.context.createAnalyser();
+    this.analyser.fftSize = 8192;
+    this.analyser.smoothingTimeConstant = 0;
+    source.connect(this.analyser);
+    this.buffer = new Float32Array(this.analyser.fftSize);
+    this.noiseProfile = await sampleNoiseFloor(this.analyser, this.buffer, 320);
+
+    this.running = true;
+    this.callbacks.status?.("Live mic sync on");
+    await this.runCycle();
+    this.timer = window.setInterval(() => {
+      this.runCycle().catch((error) => {
+        this.callbacks.status?.(error.message || "Live sync missed");
+      });
+    }, LIVE_SYNC_INTERVAL_MS);
+  }
+
+  async stop() {
+    this.running = false;
+    if (this.timer) {
+      window.clearInterval(this.timer);
+      this.timer = null;
+    }
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.stream = null;
+    await this.context?.close?.();
+    this.context = null;
+    this.analyser = null;
+    this.buffer = null;
+    this.callbacks.status?.("Live mic sync off");
+  }
+
+  async runCycle() {
+    if (!this.running || this.inCycle || !this.analyser || !this.buffer) {
+      return;
+    }
+
+    this.inCycle = true;
+    try {
+      const activeIds = this.engine.getActiveSpeakerIds();
+      if (activeIds.length < 2) {
+        return;
+      }
+
+      if (!this.engine.isPlaying) {
+        this.callbacks.status?.("Live mic sync armed");
+        return;
+      }
+
+      this.noiseProfile = await sampleNoiseFloor(this.analyser, this.buffer, 160);
+      const readings = {};
+      const peaks = {};
+
+      for (const id of activeIds) {
+        this.callbacks.status?.(`Checking ${id} sync`);
+        await sleep(110);
+        const firedAt = performance.now();
+        const startDelayMs = await this.engine.playSpeakerPing(id, {
+          gain: id === "bass" ? 0.8 : 0.68,
+          startDelay: 0.1,
+          toneHz: 1400,
+          noiseAmount: 0.86,
+          bypassCrossover: true,
+        });
+
+        const result = await waitForImpulse(
+          this.analyser,
+          this.buffer,
+          this.noiseProfile,
+          firedAt + startDelayMs,
+          1350,
+        );
+        readings[id] = result.latencyMs;
+        peaks[id] = result.peak;
+        await sleep(120);
+      }
+
+      const hardwareLatencies = {};
+      for (const id of activeIds) {
+        const speaker = this.engine.getSettings().speakers[id];
+        hardwareLatencies[id] = readings[id] - speaker.delayMs;
+      }
+
+      const hardwareValues = Object.values(hardwareLatencies).filter(Number.isFinite);
+      if (hardwareValues.length < 2) {
+        this.callbacks.status?.("Live sync needs clearer signal");
+        return;
+      }
+
+      const slowestHardware = Math.max(...hardwareValues);
+      let biggestAdjustment = 0;
+      for (const id of activeIds) {
+        const speaker = this.engine.getSettings().speakers[id];
+        const targetDelay = clamp(slowestHardware - hardwareLatencies[id], 0, MAX_DELAY_MS);
+        const adjustment = clamp(targetDelay - speaker.delayMs, -LIVE_SYNC_MAX_ADJUST_MS, LIVE_SYNC_MAX_ADJUST_MS);
+        if (Math.abs(adjustment) >= 0.8) {
+          this.engine.setSpeakerDelay(id, roundTenth(speaker.delayMs + adjustment));
+          biggestAdjustment = Math.max(biggestAdjustment, Math.abs(adjustment));
+        }
+      }
+
+      this.callbacks.progress?.(100);
+      this.callbacks.status?.(
+        biggestAdjustment >= 0.8
+          ? `Live synced ${roundTenth(biggestAdjustment)} ms`
+          : "Live sync locked",
+      );
+      this.callbacks.result?.({ readings, peaks, adjustmentMs: biggestAdjustment });
+    } catch (error) {
+      this.callbacks.status?.("Live sync listening");
+    } finally {
+      this.inCycle = false;
+    }
+  }
 }

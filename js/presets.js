@@ -1,4 +1,4 @@
-import { EQ_BANDS, createDefaultSettings, mergeSettings } from "./constants.js";
+import { EQ_BANDS, createDefaultSettings, mergeSettings } from "./constants.js?v=20260606-live-mic-sync";
 
 const STORAGE_KEY = "speaker-splitter-pro.presets.v1";
 const LAST_SESSION_KEY = "speaker-splitter-pro.last-session.v1";
