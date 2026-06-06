@@ -59,10 +59,17 @@ class SpeakerPath {
     this.media = new Audio();
     this.media.preload = "auto";
     this.media.playsInline = true;
+    this.nextMedia = new Audio();
+    this.nextMedia.preload = "auto";
+    this.nextMedia.playsInline = true;
 
     this.mediaSource = this.context.createMediaElementSource(this.media);
+    this.nextMediaSource = this.context.createMediaElementSource(this.nextMedia);
     this.liveSource = null;
+    this.primaryInputGain = this.context.createGain();
+    this.nextInputGain = this.context.createGain();
     this.inputGain = this.context.createGain();
+    this.activeSlot = "primary";
 
     // Two cascaded high-pass and low-pass filters form a smooth 24 dB/octave
     // crossover while still allowing live frequency moves without zipper noise.
@@ -132,14 +139,18 @@ class SpeakerPath {
     this.ceiling.gain.value = 0.82;
     this.analyser.fftSize = 4096;
     this.analyser.smoothingTimeConstant = 0.82;
+    this.primaryInputGain.gain.value = 1;
+    this.nextInputGain.gain.value = 0;
 
     this.connectGraph();
     this.setCrossover(160, 3500);
   }
 
   connectGraph() {
-    this.mediaSource
-      .connect(this.inputGain)
+    this.mediaSource.connect(this.primaryInputGain).connect(this.inputGain);
+    this.nextMediaSource.connect(this.nextInputGain).connect(this.inputGain);
+
+    this.inputGain
       .connect(this.highPassA)
       .connect(this.highPassB)
       .connect(this.lowPassA)
@@ -204,15 +215,35 @@ class SpeakerPath {
   async load(url) {
     this.stopLiveInput();
     this.media.pause();
+    this.nextMedia.pause();
+    this.nextMedia.removeAttribute("src");
+    this.nextMedia.load();
+    this.activeSlot = "primary";
+    this.resetSourceBlend();
     this.media.src = url;
     this.media.load();
     await waitForMediaEvent(this.media, "loadedmetadata");
   }
 
+  async loadNext(url) {
+    this.stopLiveInput();
+    const target = this.activeSlot === "primary" ? this.nextMedia : this.media;
+    target.pause();
+    target.src = url;
+    target.currentTime = 0;
+    target.load();
+    await waitForMediaEvent(target, "loadedmetadata");
+  }
+
   loadStream(stream) {
     this.media.pause();
+    this.nextMedia.pause();
     this.media.removeAttribute("src");
+    this.nextMedia.removeAttribute("src");
     this.media.load();
+    this.nextMedia.load();
+    this.activeSlot = "primary";
+    this.resetSourceBlend();
     this.stopLiveInput();
     this.liveSource = this.context.createMediaStreamSource(stream);
     this.liveSource.connect(this.inputGain);
@@ -338,6 +369,7 @@ class SpeakerPath {
     if (typeof this.media.setSinkId === "function") {
       try {
         await this.media.setSinkId(this.deviceId);
+        await this.nextMedia.setSinkId(this.deviceId);
         routed = true;
       } catch (error) {
         lastError = error;
@@ -357,26 +389,91 @@ class SpeakerPath {
   }
 
   setCurrentTime(seconds) {
-    if (Number.isFinite(this.media.duration)) {
-      this.media.currentTime = clamp(seconds, 0, this.media.duration);
+    const media = this.getActiveMedia();
+    if (Number.isFinite(media.duration)) {
+      media.currentTime = clamp(seconds, 0, media.duration);
     }
   }
 
   setPlaybackRate(rate) {
     const safeRate = clamp(rate, 0.25, 4);
     this.media.playbackRate = safeRate;
+    this.nextMedia.playbackRate = safeRate;
     if ("preservesPitch" in this.media) {
       this.media.preservesPitch = false;
+    }
+    if ("preservesPitch" in this.nextMedia) {
+      this.nextMedia.preservesPitch = false;
     }
   }
 
   async play() {
     await this.resume();
-    await this.media.play();
+    await this.getActiveMedia().play();
+  }
+
+  async playInactive() {
+    await this.resume();
+    await this.getInactiveMedia().play();
   }
 
   pause() {
     this.media.pause();
+    this.nextMedia.pause();
+  }
+
+  getActiveMedia() {
+    return this.activeSlot === "primary" ? this.media : this.nextMedia;
+  }
+
+  getInactiveMedia() {
+    return this.activeSlot === "primary" ? this.nextMedia : this.media;
+  }
+
+  resetSourceBlend() {
+    const now = this.context.currentTime;
+    this.primaryInputGain.gain.cancelScheduledValues(now);
+    this.nextInputGain.gain.cancelScheduledValues(now);
+    this.primaryInputGain.gain.setValueAtTime(this.activeSlot === "primary" ? 1 : 0, now);
+    this.nextInputGain.gain.setValueAtTime(this.activeSlot === "next" ? 1 : 0, now);
+  }
+
+  startSourceBlend(seconds) {
+    const duration = Math.max(0.15, Number(seconds) || 0.15);
+    const now = this.context.currentTime;
+    this.primaryInputGain.gain.cancelScheduledValues(now);
+    this.nextInputGain.gain.cancelScheduledValues(now);
+    this.primaryInputGain.gain.setValueAtTime(this.primaryInputGain.gain.value, now);
+    this.nextInputGain.gain.setValueAtTime(this.nextInputGain.gain.value, now);
+    this.primaryInputGain.gain.linearRampToValueAtTime(this.activeSlot === "primary" ? 0 : 1, now + duration);
+    this.nextInputGain.gain.linearRampToValueAtTime(this.activeSlot === "primary" ? 1 : 0, now + duration);
+  }
+
+  finishSourceBlend() {
+    const oldActive = this.getActiveMedia();
+    this.activeSlot = this.activeSlot === "primary" ? "next" : "primary";
+    oldActive.pause();
+    oldActive.removeAttribute("src");
+    oldActive.load();
+    this.resetSourceBlend();
+  }
+
+  cancelSourceBlend(fadeSeconds = 0.08) {
+    const duration = Math.max(0.02, fadeSeconds);
+    const now = this.context.currentTime;
+    this.primaryInputGain.gain.cancelScheduledValues(now);
+    this.nextInputGain.gain.cancelScheduledValues(now);
+    this.primaryInputGain.gain.setValueAtTime(this.primaryInputGain.gain.value, now);
+    this.nextInputGain.gain.setValueAtTime(this.nextInputGain.gain.value, now);
+    this.primaryInputGain.gain.linearRampToValueAtTime(this.activeSlot === "primary" ? 1 : 0, now + duration);
+    this.nextInputGain.gain.linearRampToValueAtTime(this.activeSlot === "next" ? 1 : 0, now + duration);
+    const inactive = this.getInactiveMedia();
+    window.setTimeout(() => {
+      inactive.pause();
+      inactive.removeAttribute("src");
+      inactive.load();
+    }, duration * 1000 + 40);
+  }
   }
 
   async suspend() {
@@ -450,16 +547,23 @@ export class AudioEngine extends EventTarget {
     this.liveStream = null;
     this.duration = 0;
     this.isPlaying = false;
+    this.isCrossfading = false;
     this.driftTimer = null;
 
     for (const [id, path] of Object.entries(this.paths)) {
       path.setRole(id);
-      path.media.addEventListener("ended", () => {
-        if (this.getActiveSpeakerIds()[0] === id) {
+      const onEnded = (event) => {
+        if (
+          !this.isCrossfading &&
+          this.getActiveSpeakerIds()[0] === id &&
+          path.getActiveMedia() === event.currentTarget
+        ) {
           this.pause();
           this.dispatchEvent(new Event("ended"));
         }
-      });
+      };
+      path.media.addEventListener("ended", onEnded);
+      path.nextMedia.addEventListener("ended", onEnded);
     }
 
     this.applySettings(this.settings);
@@ -498,6 +602,62 @@ export class AudioEngine extends EventTarget {
     this.duration = this.paths.bass.media.duration || 0;
     this.setCurrentTime(0);
     this.dispatchEvent(new CustomEvent("fileloaded", { detail: { file, duration: this.duration } }));
+  }
+
+  async crossfadeToFile(file, seconds = 5) {
+    if (!file) {
+      throw new Error("No audio file selected.");
+    }
+
+    if (this.liveStream || !this.objectUrl) {
+      await this.loadFile(file);
+      return;
+    }
+
+    const fadeSeconds = clamp(Number(seconds) || 0, 0.25, 12);
+    const previousUrl = this.objectUrl;
+    const nextUrl = URL.createObjectURL(file);
+    const activePaths = this.getActivePaths();
+    this.isCrossfading = true;
+
+    try {
+      await Promise.all(Object.values(this.paths).map((path) => path.loadNext(nextUrl)));
+      await Promise.all(activePaths.map((path) => path.resume()));
+      await Promise.all(activePaths.map((path) => path.playInactive()));
+
+      for (const path of Object.values(this.paths)) {
+        path.startSourceBlend(fadeSeconds);
+      }
+
+      this.file = file;
+      this.objectUrl = nextUrl;
+      this.duration = this.paths.bass.getInactiveMedia().duration || this.duration;
+      this.isPlaying = true;
+      this.dispatchEvent(new CustomEvent("crossfadestart", { detail: { file, duration: this.duration } }));
+      this.dispatchEvent(new Event("playstate"));
+
+      await new Promise((resolve) => window.setTimeout(resolve, fadeSeconds * 1000));
+
+      for (const path of Object.values(this.paths)) {
+        path.finishSourceBlend();
+      }
+
+      URL.revokeObjectURL(previousUrl);
+      this.duration = this.paths.bass.getActiveMedia().duration || this.duration;
+      this.isCrossfading = false;
+      this.startDriftCorrection();
+      this.dispatchEvent(new CustomEvent("fileloaded", { detail: { file, duration: this.duration } }));
+      this.dispatchEvent(new Event("crossfadeend"));
+      this.dispatchEvent(new Event("playstate"));
+    } catch (error) {
+      this.isCrossfading = false;
+      URL.revokeObjectURL(nextUrl);
+      this.objectUrl = previousUrl;
+      for (const path of Object.values(this.paths)) {
+        path.cancelSourceBlend(0.08);
+      }
+      throw error;
+    }
   }
 
   async loadLiveStream(stream) {
@@ -627,7 +787,7 @@ export class AudioEngine extends EventTarget {
     }
 
     const first = this.getActivePaths()[0] || this.paths.bass;
-    return first.media.currentTime || 0;
+    return first.getActiveMedia().currentTime || 0;
   }
 
   async setThreeWay(enabled) {
@@ -812,15 +972,17 @@ export class AudioEngine extends EventTarget {
 
       const active = this.getActivePaths();
       const reference = active[0];
-      if (!reference || reference.media.paused) {
+      const referenceMedia = reference?.getActiveMedia();
+      if (!referenceMedia || referenceMedia.paused) {
         return;
       }
 
-      const refTime = reference.media.currentTime;
+      const refTime = referenceMedia.currentTime;
       for (const path of active.slice(1)) {
-        const drift = path.media.currentTime - refTime;
+        const media = path.getActiveMedia();
+        const drift = media.currentTime - refTime;
         if (Math.abs(drift) > 0.045) {
-          path.media.currentTime = refTime;
+          media.currentTime = refTime;
         }
       }
     }, 300);

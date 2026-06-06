@@ -157,6 +157,7 @@ let trackId = 0;
 let autoAdvanceArmed = true;
 let scratchState = null;
 let draggedTrackId = null;
+let queueBlendInProgress = false;
 
 function setPill(element, message, tone = "ok") {
   element.textContent = message;
@@ -437,7 +438,7 @@ function updateClock() {
       duration - current <= blendSeconds
     ) {
       autoAdvanceArmed = false;
-      playNextTrack(true);
+      blendToNextTrack(blendSeconds);
     }
   }
   requestAnimationFrame(updateClock);
@@ -918,8 +919,47 @@ async function playNextTrack(autoplay = Boolean(engine?.isPlaying)) {
     return false;
   }
 
+  if (autoplay && dom.autoBlendToggle.checked && Number(dom.blendTime.value) > 0) {
+    return blendToNextTrack(Number(dom.blendTime.value));
+  }
+
   await loadTrack(nextIndex, { autoplay });
   return true;
+}
+
+async function blendToNextTrack(seconds = Number(dom.blendTime.value)) {
+  if (queueBlendInProgress || !engine?.objectUrl || engine.liveStream) {
+    return false;
+  }
+
+  const nextIndex = getNextTrackIndex();
+  const track = playlist[nextIndex];
+  if (!track) {
+    setEngineStatus("End of queue", "warn");
+    return false;
+  }
+
+  queueBlendInProgress = true;
+  autoAdvanceArmed = false;
+  setEngineStatus(`Blending into ${track.name}`, "warn");
+
+  try {
+    await engine.crossfadeToFile(track.file, seconds);
+    currentTrackIndex = nextIndex;
+    currentTrackId = track.id;
+    dom.fileName.textContent = track.name;
+    autoAdvanceArmed = true;
+    updateTransportAvailability(true);
+    updateQueueUi();
+    setEngineStatus("Playing");
+    return true;
+  } catch (error) {
+    autoAdvanceArmed = true;
+    setEngineStatus(error.message || "Blend failed", "error");
+    return false;
+  } finally {
+    queueBlendInProgress = false;
+  }
 }
 
 function clearQueue() {
