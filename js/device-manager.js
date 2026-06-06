@@ -3,7 +3,9 @@ export class DeviceManager extends EventTarget {
     super();
     this.devices = [];
     this.pickerValue = "__choose_output__";
+    this.rememberedKey = "speaker-splitter-pro.remembered-devices.v1";
     this.support = this.getSupport();
+    this.loadRememberedDevices();
 
     if (navigator.mediaDevices?.addEventListener) {
       navigator.mediaDevices.addEventListener("devicechange", () => {
@@ -24,11 +26,39 @@ export class DeviceManager extends EventTarget {
       secureContext: window.isSecureContext,
       mediaDevices: Boolean(navigator.mediaDevices),
       enumerateDevices: Boolean(navigator.mediaDevices?.enumerateDevices),
-      selectAudioOutput: Boolean(navigator.mediaDevices?.selectAudioOutput),
+      selectAudioOutput: Boolean(navigator.mediaDevices?.selectAudioOutput && !fileMode),
       elementSink: Boolean("setSinkId" in HTMLMediaElement.prototype),
       contextSink,
       outputRouting: contextSink || Boolean("setSinkId" in HTMLMediaElement.prototype),
     };
+  }
+
+  loadRememberedDevices() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(this.rememberedKey) || "[]");
+      if (Array.isArray(stored)) {
+        this.devices = stored.map((device) => this.normalizeDevice(device));
+      }
+    } catch {
+      this.devices = [];
+    }
+  }
+
+  saveRememberedDevices() {
+    try {
+      const remembered = this.devices
+        .filter((device) => device.deviceId && device.deviceId !== "default")
+        .map((device) => ({
+          deviceId: device.deviceId,
+          groupId: device.groupId || "",
+          kind: "audiooutput",
+          label: device.label || "Remembered output",
+          remembered: true,
+        }));
+      localStorage.setItem(this.rememberedKey, JSON.stringify(remembered));
+    } catch {
+      // Private windows or locked-down browsers may block local storage.
+    }
   }
 
   async requestAccess() {
@@ -81,6 +111,7 @@ export class DeviceManager extends EventTarget {
       groupId: device.groupId || "",
       kind: device.kind || "audiooutput",
       label: device.label || "Selected output",
+      remembered: Boolean(device.remembered),
     };
   }
 
@@ -96,6 +127,85 @@ export class DeviceManager extends EventTarget {
     } else {
       this.devices.push(normalized);
     }
+    this.saveRememberedDevices();
+  }
+
+  rememberDevices(devices = []) {
+    for (const device of devices) {
+      this.rememberDevice(device);
+    }
+  }
+
+  getCompatibility() {
+    if (this.support.fileMode) {
+      return {
+        tone: "warn",
+        label: "File mode limits devices",
+      };
+    }
+
+    if (!this.support.mediaDevices) {
+      return {
+        tone: "error",
+        label: "Device APIs unavailable",
+      };
+    }
+
+    if (this.support.contextSink && this.support.selectAudioOutput) {
+      return {
+        tone: "ok",
+        label: "Full device routing ready",
+      };
+    }
+
+    if (this.support.outputRouting) {
+      return {
+        tone: "warn",
+        label: "Limited routing mode",
+      };
+    }
+
+    return {
+      tone: "warn",
+      label: "Use system default output",
+    };
+  }
+
+  normalizeLabel(label = "") {
+    return label
+      .toLowerCase()
+      .replace(/\s*\((default|communications)\)\s*/g, "")
+      .replace(/^default\s*-\s*/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  findSavedDeviceMatch(saved = {}) {
+    if (!saved.deviceLabel && !saved.groupId && !saved.deviceId) {
+      return null;
+    }
+
+    const exact = this.devices.find((device) => device.deviceId === saved.deviceId);
+    if (exact) {
+      return exact;
+    }
+
+    if (saved.groupId) {
+      const groupMatch = this.devices.find((device) => device.groupId && device.groupId === saved.groupId);
+      if (groupMatch) {
+        return groupMatch;
+      }
+    }
+
+    const savedLabel = this.normalizeLabel(saved.deviceLabel || "");
+    if (!savedLabel) {
+      return null;
+    }
+
+    return this.devices.find((device) => {
+      const label = this.normalizeLabel(device.label);
+      return label && (label === savedLabel || label.includes(savedLabel) || savedLabel.includes(label));
+    }) || null;
   }
 
   async refresh() {
@@ -122,11 +232,12 @@ export class DeviceManager extends EventTarget {
 
     for (const device of this.devices) {
       if (device.deviceId && !nextDevices.some((item) => item.deviceId === device.deviceId)) {
-        nextDevices.push(device);
+        nextDevices.push({ ...device, remembered: true });
       }
     }
 
     this.devices = nextDevices;
+    this.saveRememberedDevices();
 
     this.dispatchEvent(new CustomEvent("devices", { detail: this.devices }));
     return this.devices;
@@ -139,7 +250,7 @@ export class DeviceManager extends EventTarget {
     for (const device of this.devices) {
       const option = document.createElement("option");
       option.value = device.deviceId;
-      option.textContent = device.label;
+      option.textContent = device.remembered ? `${device.label} (saved)` : device.label;
       select.append(option);
     }
 
@@ -150,7 +261,9 @@ export class DeviceManager extends EventTarget {
         ? "Choose another output..."
         : this.support.fileMode
           ? "Picker needs 127.0.0.1 mode"
-          : "Speaker picker unavailable";
+          : this.support.outputRouting
+            ? "Use browser/OS device permissions"
+            : "Use system default output";
       option.disabled = !this.support.selectAudioOutput;
       select.append(option);
     }

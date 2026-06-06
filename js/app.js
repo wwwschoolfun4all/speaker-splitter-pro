@@ -7,7 +7,7 @@ import {
   formatTime,
 } from "./constants.js";
 import { AudioEngine } from "./audio-engine.js?v=20260606-precision-calibrate";
-import { DeviceManager } from "./device-manager.js";
+import { DeviceManager } from "./device-manager.js?v=20260606-all-devices";
 import { SpectrumVisualizer } from "./visualizer.js";
 import {
   FACTORY_PRESETS,
@@ -20,7 +20,7 @@ import {
   parsePresetFile,
   saveLastSession,
   savePreset,
-} from "./presets.js";
+} from "./presets.js?v=20260606-all-devices";
 import { runLatencyWizard, runMicrophoneCalibration } from "./calibration.js?v=20260606-precision-calibrate";
 
 const $ = (id) => document.getElementById(id);
@@ -177,6 +177,13 @@ function setEngineStatus(message, tone = "ok") {
 
 function setDeviceStatus(message, tone = "ok") {
   setPill(dom.deviceStatus, message, tone);
+}
+
+function updateDeviceCompatibilityStatus() {
+  const compatibility = deviceManager?.getCompatibility?.();
+  if (compatibility) {
+    setDeviceStatus(compatibility.label, compatibility.tone);
+  }
 }
 
 function setPresetStatus(message) {
@@ -655,24 +662,40 @@ async function refreshDevices() {
 
   try {
     await deviceManager.refresh();
+    await restoreRememberedOutputs();
     const settings = engine.getSettings();
     for (const id of SPEAKER_IDS) {
       deviceManager.fillSelect(speakerControls[id].select, settings.speakers[id].deviceId);
     }
 
-    if (deviceManager.support.fileMode && !deviceManager.support.selectAudioOutput) {
-      setDeviceStatus("File mode: use 127.0.0.1 for speaker picker", "warn");
-    } else if (!deviceManager.support.outputRouting) {
-      setDeviceStatus("Output routing unsupported", "warn");
-    } else if (!deviceManager.support.selectAudioOutput && deviceManager.devices.length <= 1) {
-      setDeviceStatus("Use OS outputs or Enable Devices", "warn");
-    } else if (deviceManager.support.contextSink) {
-      setDeviceStatus("Device routing ready");
-    } else {
-      setDeviceStatus("Limited device routing", "warn");
-    }
+    updateDeviceCompatibilityStatus();
   } catch (error) {
     setDeviceStatus(error.message || "Device scan failed", "error");
+  }
+}
+
+async function restoreRememberedOutputs() {
+  if (!engine || !deviceManager) {
+    return;
+  }
+
+  const settings = engine.getSettings();
+  for (const id of SPEAKER_IDS) {
+    const speaker = settings.speakers[id];
+    const match = deviceManager.findSavedDeviceMatch(speaker);
+    const nextDeviceId = match?.deviceId || speaker.deviceId || "default";
+
+    try {
+      await engine.setOutputDevice(id, nextDeviceId);
+      if (match) {
+        engine.settings.speakers[id].deviceId = match.deviceId;
+        engine.settings.speakers[id].deviceLabel = match.label;
+        engine.settings.speakers[id].groupId = match.groupId || "";
+        deviceManager.rememberDevice(match);
+      }
+    } catch {
+      // A remembered device can exist in storage before the browser grants routing permission again.
+    }
   }
 }
 
@@ -711,6 +734,8 @@ async function applyDeviceSelection(id, deviceId) {
     const selected = (deviceManager?.devices || []).find((device) => device.deviceId === deviceId);
     if (selected) {
       engine.settings.speakers[id].deviceLabel = selected.label;
+      engine.settings.speakers[id].groupId = selected.groupId || "";
+      deviceManager.rememberDevice(selected);
     }
     if (routed) {
       setDeviceStatus("Output changed");
@@ -1780,9 +1805,7 @@ async function init() {
   const lastSession = loadLastSession();
   if (lastSession) {
     restoringSession = true;
-    for (const device of loadLastSessionDevices()) {
-      deviceManager.rememberDevice(device);
-    }
+    deviceManager.rememberDevices(loadLastSessionDevices());
     engine.applySettings(lastSession);
     djBaseCrossoverHz = engine.getSettings().crossoverHz;
     restoringSession = false;

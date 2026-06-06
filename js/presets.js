@@ -124,6 +124,7 @@ export function getRememberedDevices(settings) {
     seen.add(speaker.deviceId);
     devices.push({
       deviceId: speaker.deviceId,
+      groupId: speaker.groupId || "",
       label: speaker.deviceLabel || "Remembered output",
       kind: "audiooutput",
     });
@@ -134,11 +135,13 @@ export function getRememberedDevices(settings) {
 
 export function attachDeviceLabels(settings, devices = []) {
   const next = mergeSettings(settings);
-  const labelById = new Map(devices.map((device) => [device.deviceId, device.label]));
+  const deviceById = new Map(devices.map((device) => [device.deviceId, device]));
 
   for (const speaker of Object.values(next.speakers)) {
-    if (speaker.deviceId && labelById.has(speaker.deviceId)) {
-      speaker.deviceLabel = labelById.get(speaker.deviceId);
+    if (speaker.deviceId && deviceById.has(speaker.deviceId)) {
+      const device = deviceById.get(speaker.deviceId);
+      speaker.deviceLabel = device.label;
+      speaker.groupId = device.groupId || "";
     }
   }
 
