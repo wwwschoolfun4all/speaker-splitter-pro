@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101316">
+    <title>Speaker Splitter Pro</title>
+    <link rel="stylesheet" href="./styles.css?v=20260605-scratch-decks">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Production audio crossover</p>
+          <h1>Speaker Splitter Pro</h1>
+        </div>
+        <div class="status-cluster" aria-live="polite">
+          <span id="engineStatus" class="status-pill">No file loaded</span>
+          <span id="deviceStatus" class="status-pill status-pill--warn">Checking devices</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section id="dropZone" class="drop-zone" tabindex="0">
+          <input id="fileInput" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true" multiple accept="audio/mpeg,audio/mp3,audio/wav,audio/wave,audio/flac,audio/ogg,.mp3,.wav,.flac,.ogg">
+          <div>
+            <span class="drop-zone__label">Drop audio here</span>
+            <span id="fileName" class="drop-zone__file">MP3, WAV, FLAC, OGG, or a full playlist</span>
+          </div>
+          <button id="chooseFileBtn" class="button button--primary" type="button">Add Songs</button>
+        </section>
+
+        <section class="panel queue-panel" aria-label="Preselected song queue">
+          <div class="panel__header">
+            <h2>Song Queue</h2>
+            <label class="toggle-row toggle-row--compact">
+              <input id="autoBlendToggle" type="checkbox" checked>
+              <span>Auto Blend</span>
+            </label>
+          </div>
+          <div class="queue-controls">
+            <label class="range-field">
+              <span>Blend Time</span>
+              <input id="blendTime" type="range" min="0" max="12" step="1" value="5">
+              <output id="blendTimeValue">5 s</output>
+            </label>
+            <div class="button-row">
+              <button id="nextTrackBtn" class="button button--small" type="button" disabled>Next</button>
+              <button id="clearQueueBtn" class="button button--small" type="button" disabled>Clear</button>
+            </div>
+            <span id="nextTrackLabel" class="queue-next">Next: none</span>
+          </div>
+          <div id="queueList" class="queue-list" aria-live="polite"></div>
+        </section>
+
+        <section class="panel source-panel" aria-label="Live input source">
+          <div>
+            <h2>Live Input</h2>
+            <p class="panel-hint">Capture Spotify, YouTube, or another app/tab with audio, then route it through the same speaker split.</p>
+            <div class="source-warning">
+              <strong>Double audio fix</strong>
+              <span>Do not leave Spotify's normal output on the same Bluetooth speakers. Route Spotify to an unused/virtual output, or use an audio file in this app. Browsers cannot silence another app's direct speaker output.</span>
+            </div>
+          </div>
+          <div class="button-row">
+            <button id="captureAudioBtn" class="button button--primary" type="button">Capture App/Tab Audio</button>
+            <button id="stopCaptureBtn" class="button" type="button" disabled>Stop Capture</button>
+          </div>
+        </section>
+
+        <section class="panel transport-panel" aria-label="Playback controls">
+          <div class="transport-buttons">
+            <button id="playBtn" class="button button--primary" type="button" disabled>Play</button>
+            <button id="pauseBtn" class="button" type="button" disabled>Pause</button>
+            <button id="stopBtn" class="button" type="button" disabled>Stop</button>
+          </div>
+          <label class="range-field range-field--seek">
+            <span>Seek</span>
+            <input id="seekSlider" type="range" min="0" max="1000" value="0" disabled>
+          </label>
+          <div class="time-readout">
+            <span id="currentTime">0:00</span>
+            <span id="durationTime">0:00</span>
+          </div>
+          <label class="range-field">
+            <span>Master</span>
+            <input id="masterVolume" type="range" min="0" max="1.5" step="0.01" value="1">
+          </label>
+        </section>
+
+        <section class="control-grid">
+          <div class="panel" aria-label="Speaker routing">
+            <div class="panel__header">
+              <h2>Speakers</h2>
+              <div class="inline-actions">
+                <button id="enableDevicesBtn" class="button button--small" type="button">Enable Devices</button>
+                <button id="refreshDevicesBtn" class="button button--small" type="button">Refresh</button>
+              </div>
+            </div>
+            <p class="panel-hint">Use Enable Devices first. Output choices and tuning changes are restored automatically from this browser.</p>
+
+            <label class="toggle-row">
+              <input id="threeWayToggle" type="checkbox">
+              <span>Three-way crossover</span>
+            </label>
+
+            <div id="speakerRows" class="speaker-rows">
+              <article class="speaker-strip" data-speaker-panel="bass">
+                <div class="speaker-strip__title">
+                  <strong>Bass Speaker</strong>
+                  <span>Low frequencies</span>
+                </div>
+                <label>
+                  <span>Output</span>
+                  <select id="bassDeviceSelect"></select>
+                </label>
+                <label class="range-field">
+                  <span>Volume</span>
+                  <input id="bassVolume" type="range" min="0" max="1.5" step="0.01" value="1">
+                </label>
+                <label class="range-field">
+                  <span>Delay</span>
+                  <input id="bassDelay" type="range" min="0" max="1000" step="1" value="0">
+                  <output id="bassDelayValue">0 ms</output>
+                </label>
+              </article>
+
+              <article class="speaker-strip" data-speaker-panel="vocal">
+                <div class="speaker-strip__title">
+                  <strong>Vocal/Treble Speaker</strong>
+                  <span>Mids and highs</span>
+                </div>
+                <label>
+                  <span>Output</span>
+                  <select id="vocalDeviceSelect"></select>
+                </label>
+                <label class="range-field">
+                  <span>Volume</span>
+                  <input id="vocalVolume" type="range" min="0" max="1.5" step="0.01" value="1">
+                </label>
+                <label class="range-field">
+                  <span>Delay</span>
+                  <input id="vocalDelay" type="range" min="0" max="1000" step="1" value="0">
+                  <output id="vocalDelayValue">0 ms</output>
+                </label>
+              </article>
+
+              <article class="speaker-strip is-hidden" data-speaker-panel="mid">
+                <div class="speaker-strip__title">
+                  <strong>Midrange Speaker</strong>
+                  <span>Voice band</span>
+                </div>
+                <label>
+                  <span>Output</span>
+                  <select id="midDeviceSelect"></select>
+                </label>
+                <label class="range-field">
+                  <span>Volume</span>
+                  <input id="midVolume" type="range" min="0" max="1.5" step="0.01" value="1">
+                </label>
+                <label class="range-field">
+                  <span>Delay</span>
+                  <input id="midDelay" type="range" min="0" max="1000" step="1" value="0">
+                  <output id="midDelayValue">0 ms</output>
+                </label>
+              </article>
+
+              <article class="speaker-strip is-hidden" data-speaker-panel="treble">
+                <div class="speaker-strip__title">
+                  <strong>Treble Speaker</strong>
+                  <span>High frequencies</span>
+                </div>
+                <label>
+                  <span>Output</span>
+                  <select id="trebleDeviceSelect"></select>
+                </label>
+                <label class="range-field">
+                  <span>Volume</span>
+                  <input id="trebleVolume" type="range" min="0" max="1.5" step="0.01" value="1">
+                </label>
+                <label class="range-field">
+                  <span>Delay</span>
+                  <input id="trebleDelay" type="range" min="0" max="1000" step="1" value="0">
+                  <output id="trebleDelayValue">0 ms</output>
+                </label>
+              </article>
+            </div>
+          </div>
+
+          <div class="panel" aria-label="Crossover and synchronization">
+            <div class="panel__header">
+              <h2>Crossover</h2>
+              <label class="toggle-row toggle-row--compact">
+                <input id="vocalIsoToggle" type="checkbox">
+                <span>AI vocal isolation</span>
+              </label>
+            </div>
+
+            <label class="range-field">
+              <span>Bass crossover</span>
+              <input id="crossoverSlider" type="range" min="50" max="500" step="1" value="160">
+              <output id="crossoverValue">160 Hz</output>
+            </label>
+
+            <label id="trebleSplitRow" class="range-field is-hidden">
+              <span>Treble split</span>
+              <input id="trebleSplitSlider" type="range" min="1000" max="8000" step="25" value="3500">
+              <output id="trebleSplitValue">3500 Hz</output>
+            </label>
+
+            <div class="button-row">
+              <button id="syncTestBtn" class="button button--primary" type="button">Sync Test</button>
+              <button id="latencyWizardBtn" class="button" type="button">Latency Wizard</button>
+              <button id="autoCalibrateBtn" class="button" type="button">Mic Calibrate</button>
+            </div>
+
+            <div id="calibrationPanel" class="calibration-panel is-hidden" aria-live="polite">
+              <div>
+                <strong>Calibration</strong>
+                <span id="calibrationStatus">Ready</span>
+              </div>
+              <progress id="calibrationProgress" value="0" max="100"></progress>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel dj-panel" aria-label="Auto DJ controls">
+          <div class="panel__header">
+            <div>
+              <h2>Auto DJ</h2>
+              <p class="panel-hint">Live mastering listens to the mix and gently balances bass, vocals, treble, and headroom.</p>
+            </div>
+            <label class="toggle-row toggle-row--compact">
+              <input id="autoDjToggle" type="checkbox">
+              <span>Auto Perfect</span>
+            </label>
+          </div>
+
+          <div class="deck-stage" aria-label="DJ decks">
+            <article class="deck" data-deck="bass">
+              <div class="deck__meta">
+                <strong>Deck A</strong>
+                <span>Bass feed</span>
+              </div>
+              <div class="platter" id="bassPlatter" role="button" tabindex="0" aria-label="Scratch bass deck" title="Drag to scratch or jog the track">
+                <div class="platter__disc">
+                  <span class="platter__marker"></span>
+                  <span class="platter__label">BASS</span>
+                </div>
+              </div>
+              <div class="deck__meter"><i id="bassDeckMeter"></i></div>
+            </article>
+
+            <div class="mixer-bridge">
+              <span id="deckSourceBadge">No source</span>
+              <span id="deckMotionBadge">Stopped</span>
+              <span id="deckScratchBadge">Scratch ready</span>
+            </div>
+
+            <article class="deck" data-deck="vocal">
+              <div class="deck__meta">
+                <strong>Deck B</strong>
+                <span>Vocal/Treble feed</span>
+              </div>
+              <div class="platter" id="vocalPlatter" role="button" tabindex="0" aria-label="Scratch vocal deck" title="Drag to scratch or jog the track">
+                <div class="platter__disc">
+                  <span class="platter__marker"></span>
+                  <span class="platter__label">VOCAL</span>
+                </div>
+              </div>
+              <div class="deck__meter"><i id="vocalDeckMeter"></i></div>
+            </article>
+          </div>
+
+          <div class="dj-grid">
+            <label class="range-field">
+              <span>Speaker Blend</span>
+              <input id="djBlend" type="range" min="-100" max="100" step="1" value="0">
+              <output id="djBlendValue">Center</output>
+            </label>
+            <label class="range-field">
+              <span>Energy</span>
+              <input id="djEnergy" type="range" min="0" max="1" step="0.01" value="0.5">
+              <output id="djEnergyValue">50%</output>
+            </label>
+            <label class="range-field">
+              <span>Filter Sweep</span>
+              <input id="djFilterSweep" type="range" min="-100" max="100" step="1" value="0">
+              <output id="djFilterSweepValue">Open</output>
+            </label>
+          </div>
+
+          <div class="dj-actions">
+            <button id="bassKillBtn" class="button button--small" type="button">Bass Kill</button>
+            <button id="vocalKillBtn" class="button button--small" type="button">Vocal Kill</button>
+            <button id="bassPunchBtn" class="button button--small" type="button">Bass Punch</button>
+            <button id="vocalLiftBtn" class="button button--small" type="button">Vocal Lift</button>
+            <button id="djResetBtn" class="button button--small" type="button">Reset DJ</button>
+            <span id="autoDjStatus" class="dj-status">Manual mix</span>
+          </div>
+        </section>
+
+        <section class="panel visual-panel" aria-label="Audio visualization">
+          <div class="panel__header">
+            <h2>Analyzer</h2>
+            <div class="analyzer-actions">
+              <label class="toggle-row toggle-row--compact">
+                <input id="limiterToggle" type="checkbox" checked>
+                <span>Limiter</span>
+              </label>
+              <span id="clipStatus" class="meter-note">Limiter ready</span>
+            </div>
+          </div>
+          <canvas id="spectrumCanvas" width="1200" height="320" aria-label="Frequency spectrum"></canvas>
+          <div id="vuMeters" class="vu-grid">
+            <div class="vu-meter" data-vu="bass">
+              <span>Bass</span>
+              <div><i id="bassVu"></i></div>
+            </div>
+            <div class="vu-meter" data-vu="vocal">
+              <span>Vocal</span>
+              <div><i id="vocalVu"></i></div>
+            </div>
+            <div class="vu-meter is-hidden" data-vu="mid">
+              <span>Mid</span>
+              <div><i id="midVu"></i></div>
+            </div>
+            <div class="vu-meter is-hidden" data-vu="treble">
+              <span>Treble</span>
+              <div><i id="trebleVu"></i></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel eq-panel" aria-label="Equalizer">
+          <div class="panel__header">
+            <h2>Equalizer</h2>
+            <div id="eqTabs" class="segmented" role="tablist" aria-label="Equalizer speaker">
+              <button class="segmented__button is-active" type="button" data-eq-tab="bass">Bass</button>
+              <button class="segmented__button" type="button" data-eq-tab="vocal">Vocal</button>
+              <button class="segmented__button is-hidden" type="button" data-eq-tab="mid">Mid</button>
+              <button class="segmented__button is-hidden" type="button" data-eq-tab="treble">Treble</button>
+            </div>
+          </div>
+
+          <div id="eqSliders" class="eq-sliders"></div>
+
+          <div class="preset-strip" aria-label="Factory EQ presets">
+            <button class="button button--small" type="button" data-factory-preset="Music">Music</button>
+            <button class="button button--small" type="button" data-factory-preset="Movies">Movies</button>
+            <button class="button button--small" type="button" data-factory-preset="Gaming">Gaming</button>
+            <button class="button button--small" type="button" data-factory-preset="Podcast">Podcast</button>
+            <button class="button button--small" type="button" data-factory-preset="Bass Boost">Bass Boost</button>
+            <button class="button button--small" type="button" data-factory-preset="Bass Clean">Bass Clean</button>
+          </div>
+        </section>
+
+        <section class="panel preset-panel" aria-label="Preset management">
+          <div class="panel__header">
+            <h2>Presets</h2>
+            <span id="presetStatus" class="meter-note">Local presets available</span>
+          </div>
+          <div class="preset-controls">
+            <label>
+              <span>Name</span>
+              <input id="presetName" type="text" placeholder="My room setup" maxlength="60">
+            </label>
+            <button id="savePresetBtn" class="button button--primary" type="button">Save</button>
+            <label>
+              <span>Saved</span>
+              <select id="savedPresetSelect"></select>
+            </label>
+            <button id="loadPresetBtn" class="button" type="button">Load</button>
+            <button id="deletePresetBtn" class="button button--danger" type="button">Delete</button>
+            <button id="exportPresetBtn" class="button" type="button">Export JSON</button>
+            <label class="button file-button">
+              Import JSON
+              <input id="importPresetInput" type="file" accept="application/json,.json">
+            </label>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./js/app.js?v=20260605-dj-decks"></script>
+  </body>
+</html>
