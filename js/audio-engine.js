@@ -61,8 +61,14 @@ class SpeakerPath {
     this.media = new Audio();
     this.media.preload = "auto";
     this.media.playsInline = true;
+    this.nextMedia = new Audio();
+    this.nextMedia.preload = "auto";
+    this.nextMedia.playsInline = true;
 
     this.mediaSource = this.context.createMediaElementSource(this.media);
+    this.nextMediaSource = this.context.createMediaElementSource(this.nextMedia);
+    this.deckGain = this.context.createGain();
+    this.nextDeckGain = this.context.createGain();
     this.liveSource = null;
     this.inputGain = this.context.createGain();
 
@@ -120,6 +126,8 @@ class SpeakerPath {
     this.analyser = this.context.createAnalyser();
 
     this.delay.delayTime.value = 0;
+    this.deckGain.gain.value = 1;
+    this.nextDeckGain.gain.value = 0;
     this.inputGain.gain.value = 0.72;
     this.volume.gain.value = 1;
     this.djGain.gain.value = 1;
@@ -140,8 +148,10 @@ class SpeakerPath {
   }
 
   connectGraph() {
-    this.mediaSource
-      .connect(this.inputGain)
+    this.mediaSource.connect(this.deckGain).connect(this.inputGain);
+    this.nextMediaSource.connect(this.nextDeckGain).connect(this.inputGain);
+
+    this.inputGain
       .connect(this.highPassA)
       .connect(this.highPassB)
       .connect(this.lowPassA)
@@ -206,15 +216,31 @@ class SpeakerPath {
   async load(url) {
     this.stopLiveInput();
     this.media.pause();
+    this.nextMedia.pause();
+    this.nextMedia.removeAttribute("src");
+    this.nextMedia.load();
+    this.setDeckGains(1, 0, 0.01);
     this.media.src = url;
     this.media.load();
     await waitForMediaEvent(this.media, "loadedmetadata");
   }
 
+  async loadNext(url) {
+    this.stopLiveInput();
+    this.nextMedia.pause();
+    this.nextMedia.src = url;
+    this.nextMedia.load();
+    await waitForMediaEvent(this.nextMedia, "loadedmetadata");
+  }
+
   loadStream(stream) {
     this.media.pause();
+    this.nextMedia.pause();
     this.media.removeAttribute("src");
+    this.nextMedia.removeAttribute("src");
     this.media.load();
+    this.nextMedia.load();
+    this.setDeckGains(1, 0, 0.01);
     this.stopLiveInput();
     this.liveSource = this.context.createMediaStreamSource(stream);
     this.liveSource.connect(this.inputGain);
@@ -356,6 +382,7 @@ class SpeakerPath {
     if (typeof this.media.setSinkId === "function") {
       try {
         await this.media.setSinkId(this.deviceId);
+        await this.nextMedia.setSinkId?.(this.deviceId);
         routed = true;
       } catch (error) {
         lastError = error;
@@ -383,8 +410,12 @@ class SpeakerPath {
   setPlaybackRate(rate) {
     const safeRate = clamp(rate, 0.25, 4);
     this.media.playbackRate = safeRate;
+    this.nextMedia.playbackRate = safeRate;
     if ("preservesPitch" in this.media) {
       this.media.preservesPitch = false;
+    }
+    if ("preservesPitch" in this.nextMedia) {
+      this.nextMedia.preservesPitch = false;
     }
   }
 
@@ -395,6 +426,7 @@ class SpeakerPath {
 
   pause() {
     this.media.pause();
+    this.nextMedia.pause();
   }
 
   async suspend() {
@@ -431,6 +463,35 @@ class SpeakerPath {
     source.connect(clickGain).connect(bypassCrossover ? this.delay : this.inputGain);
     source.start(this.context.currentTime + startDelay);
     return startDelay * 1000;
+  }
+
+  setDeckGains(currentGain, nextGain, rampSeconds = 0.05) {
+    smoothValue(this.deckGain.gain, clamp(currentGain, 0, 1), this.context, rampSeconds);
+    smoothValue(this.nextDeckGain.gain, clamp(nextGain, 0, 1), this.context, rampSeconds);
+  }
+
+  async playNextFromStart() {
+    await this.resume();
+    this.nextMedia.currentTime = 0;
+    await this.nextMedia.play();
+  }
+
+  promoteNextDeck() {
+    const oldMedia = this.media;
+    const oldSource = this.mediaSource;
+    const oldGain = this.deckGain;
+
+    this.media = this.nextMedia;
+    this.mediaSource = this.nextMediaSource;
+    this.deckGain = this.nextDeckGain;
+
+    this.nextMedia = oldMedia;
+    this.nextMediaSource = oldSource;
+    this.nextDeckGain = oldGain;
+    this.nextMedia.pause();
+    this.nextMedia.removeAttribute("src");
+    this.nextMedia.load();
+    this.setDeckGains(1, 0, 0.02);
   }
 
   getSpectrum() {
@@ -475,6 +536,8 @@ export class AudioEngine extends EventTarget {
     this.duration = 0;
     this.isPlaying = false;
     this.driftTimer = null;
+    this.crossfadeTimer = null;
+    this.isCrossfading = false;
     this.syncState = {
       locked: false,
       maxDriftMs: 0,
@@ -483,12 +546,17 @@ export class AudioEngine extends EventTarget {
 
     for (const [id, path] of Object.entries(this.paths)) {
       path.setRole(id);
-      path.media.addEventListener("ended", () => {
+      const onEnded = () => {
+        if (this.isCrossfading) {
+          return;
+        }
         if (this.getActiveSpeakerIds()[0] === id) {
           this.pause();
           this.dispatchEvent(new Event("ended"));
         }
-      });
+      };
+      path.media.addEventListener("ended", onEnded);
+      path.nextMedia.addEventListener("ended", onEnded);
     }
 
     this.applySettings(this.settings);
@@ -527,6 +595,64 @@ export class AudioEngine extends EventTarget {
     this.duration = this.paths.bass.media.duration || 0;
     this.setCurrentTime(0);
     this.dispatchEvent(new CustomEvent("fileloaded", { detail: { file, duration: this.duration } }));
+  }
+
+  async crossfadeToFile(file, durationSeconds = 5) {
+    if (!file) {
+      throw new Error("No audio file selected.");
+    }
+    if (this.liveStream) {
+      throw new Error("Queue blending is not available for live input.");
+    }
+    if (!this.objectUrl || !this.isPlaying) {
+      await this.loadFile(file);
+      await this.play();
+      return;
+    }
+
+    this.isCrossfading = true;
+    window.clearTimeout(this.crossfadeTimer);
+    const nextUrl = URL.createObjectURL(file);
+    const previousUrl = this.objectUrl;
+    const fadeSeconds = clamp(durationSeconds, 0.25, 12);
+
+    try {
+      await Promise.all(Object.values(this.paths).map((path) => path.loadNext(nextUrl)));
+      await Promise.all(this.getActivePaths().map((path) => path.playNextFromStart()));
+      for (const path of Object.values(this.paths)) {
+        path.setDeckGains(0, 1, fadeSeconds);
+      }
+
+      await new Promise((resolve) => {
+        this.crossfadeTimer = window.setTimeout(resolve, fadeSeconds * 1000);
+      });
+
+      for (const path of Object.values(this.paths)) {
+        path.promoteNextDeck();
+      }
+      if (previousUrl) {
+        URL.revokeObjectURL(previousUrl);
+      }
+      this.objectUrl = nextUrl;
+      this.file = file;
+      this.duration = this.paths.bass.media.duration || 0;
+      this.resetSyncTrims();
+      this.dispatchEvent(new CustomEvent("fileloaded", { detail: { file, duration: this.duration } }));
+      this.dispatchEvent(new Event("seek"));
+      this.dispatchEvent(new Event("playstate"));
+    } catch (error) {
+      URL.revokeObjectURL(nextUrl);
+      for (const path of Object.values(this.paths)) {
+        path.nextMedia.pause();
+        path.nextMedia.removeAttribute("src");
+        path.nextMedia.load();
+        path.setDeckGains(1, 0, 0.08);
+      }
+      throw error;
+    } finally {
+      this.isCrossfading = false;
+      this.crossfadeTimer = null;
+    }
   }
 
   async loadLiveStream(stream) {
@@ -610,6 +736,9 @@ export class AudioEngine extends EventTarget {
   }
 
   pause() {
+    window.clearTimeout(this.crossfadeTimer);
+    this.crossfadeTimer = null;
+    this.isCrossfading = false;
     if (this.liveStream) {
       Promise.all(this.getActivePaths().map((path) => path.suspend())).catch(() => {});
     } else {
@@ -623,6 +752,9 @@ export class AudioEngine extends EventTarget {
   }
 
   stop() {
+    window.clearTimeout(this.crossfadeTimer);
+    this.crossfadeTimer = null;
+    this.isCrossfading = false;
     if (this.liveStream) {
       this.stopLiveCapture();
       return;

@@ -6,7 +6,7 @@ import {
   formatHz,
   formatTime,
 } from "./constants.js?v=20260606-live-mic-sync";
-import { AudioEngine } from "./audio-engine.js?v=20260606-live-mic-sync";
+import { AudioEngine } from "./audio-engine.js?v=20260611-real-crossfade";
 import { DeviceManager } from "./device-manager.js?v=20260606-all-devices";
 import { SpectrumVisualizer } from "./visualizer.js";
 import {
@@ -769,7 +769,8 @@ function updateQueueUi() {
   }
 
   const nextIndex = getNextTrackIndex();
-  dom.nextTrackBtn.disabled = nextIndex < 0 || Boolean(engine?.liveStream);
+  const queueLocked = Boolean(engine?.liveStream || engine?.isCrossfading);
+  dom.nextTrackBtn.disabled = nextIndex < 0 || queueLocked;
   dom.clearQueueBtn.disabled = playlist.length === 0;
   dom.blendTimeValue.textContent = `${Number(dom.blendTime.value)} s`;
   dom.nextTrackLabel.textContent = nextIndex >= 0 ? `Next: ${playlist[nextIndex].name}` : "Next: none";
@@ -786,7 +787,7 @@ function updateQueueUi() {
   playlist.forEach((track, index) => {
     const item = document.createElement("div");
     item.className = "queue-item";
-    item.draggable = !engine?.liveStream;
+    item.draggable = !queueLocked;
     item.dataset.trackId = String(track.id);
     item.classList.toggle("is-current", index === currentTrackIndex);
     item.classList.toggle("is-next", index === nextIndex);
@@ -826,7 +827,7 @@ function updateQueueUi() {
     title.className = "button queue-title";
     title.type = "button";
     title.textContent = track.name;
-    title.disabled = Boolean(engine?.liveStream);
+    title.disabled = queueLocked;
     title.addEventListener("click", () => {
       loadTrack(index, { autoplay: Boolean(engine?.isPlaying) });
     });
@@ -834,7 +835,7 @@ function updateQueueUi() {
     const badge = document.createElement("button");
     badge.type = "button";
     badge.className = "button button--small queue-badge";
-    badge.disabled = Boolean(engine?.liveStream);
+    badge.disabled = queueLocked;
     if (index === currentTrackIndex) {
       badge.textContent = "Now";
       badge.classList.add("is-hot");
@@ -855,21 +856,21 @@ function updateQueueUi() {
     upButton.className = "button button--small queue-move";
     upButton.type = "button";
     upButton.textContent = "Up";
-    upButton.disabled = index === 0 || Boolean(engine?.liveStream);
+    upButton.disabled = index === 0 || queueLocked;
     upButton.addEventListener("click", () => moveTrack(index, index - 1));
 
     const downButton = document.createElement("button");
     downButton.className = "button button--small queue-move";
     downButton.type = "button";
     downButton.textContent = "Down";
-    downButton.disabled = index === playlist.length - 1 || Boolean(engine?.liveStream);
+    downButton.disabled = index === playlist.length - 1 || queueLocked;
     downButton.addEventListener("click", () => moveTrack(index, index + 1));
 
     const removeButton = document.createElement("button");
     removeButton.className = "button button--small queue-remove";
     removeButton.type = "button";
     removeButton.textContent = "Remove";
-    removeButton.disabled = Boolean(engine?.liveStream);
+    removeButton.disabled = queueLocked;
     removeButton.addEventListener("click", () => removeTrack(index));
 
     orderControls.append(upButton, downButton, removeButton);
@@ -953,21 +954,41 @@ async function loadTrack(index, options = {}) {
   if (!track || !engine) {
     return;
   }
+  if (engine.isCrossfading) {
+    setEngineStatus("Blend in progress", "warn");
+    return;
+  }
 
   const wasPlaying = options.autoplay ?? engine.isPlaying;
+  const blendSeconds = Number(dom.blendTime.value);
+  const shouldBlend = Boolean(
+    wasPlaying &&
+      engine.objectUrl &&
+      !engine.liveStream &&
+      !engine.isCrossfading &&
+      dom.autoBlendToggle.checked &&
+      blendSeconds > 0 &&
+      options.blend !== false,
+  );
   setEngineStatus("Loading audio", "warn");
   try {
-    await engine.loadFile(track.file);
+    if (shouldBlend) {
+      setEngineStatus(`Blending ${track.name}`, "warn");
+      const blendPromise = engine.crossfadeToFile(track.file, blendSeconds);
+      updateQueueUi();
+      await blendPromise;
+    } else {
+      await engine.loadFile(track.file);
+    }
     currentTrackIndex = index;
     currentTrackId = track.id;
     autoAdvanceArmed = true;
     dom.fileName.textContent = track.name;
     updateTransportAvailability(true);
-    setEngineStatus(wasPlaying ? "Blending next track" : "Ready");
-    if (wasPlaying) {
+    if (wasPlaying && !shouldBlend) {
       await engine.play();
-      setEngineStatus("Playing");
     }
+    setEngineStatus(wasPlaying ? "Playing" : "Ready");
   } catch (error) {
     updateTransportAvailability(false);
     setEngineStatus(error.message || "Could not load file", "error");
