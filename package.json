@@ -1,0 +1,44 @@
+{
+  "name": "speaker-splitter-pro",
+  "version": "1.0.0",
+  "description": "Desktop build of Speaker Splitter Pro.",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win portable"
+  },
+  "author": "Speaker Splitter Pro",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.speakersplitter.pro",
+    "productName": "Speaker Splitter Pro",
+    "files": [
+      "index.html",
+      "styles.css",
+      "js/**/*",
+      "electron/**/*",
+      ".nojekyll",
+      "README.md",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Speaker Splitter Pro.exe"
+    }
+  }
+}
