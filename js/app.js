@@ -1899,19 +1899,14 @@ async function init() {
 
   refreshSavedPresetSelect();
   const lastSession = loadLastSession();
+  const resumeSilentMicSync = Boolean(lastSession?.liveMicSyncEnabled);
   if (lastSession) {
     restoringSession = true;
     deviceManager.rememberDevices(loadLastSessionDevices());
     engine.applySettings(lastSession);
-    if (engine.getSettings().liveMicSyncEnabled) {
-      engine.setLiveMicSyncEnabled(false);
-      setPresetStatus("Last session restored; enable Silent mic sync when ready");
-    }
     djBaseCrossoverHz = engine.getSettings().crossoverHz;
     restoringSession = false;
-    if (!dom.presetStatus.textContent.includes("Silent mic sync")) {
-      setPresetStatus("Last session restored");
-    }
+    setPresetStatus(resumeSilentMicSync ? "Restoring silent mic sync" : "Last session restored");
   }
 
   updateSettingsUi();
@@ -1925,6 +1920,9 @@ async function init() {
   }
   await refreshDevices();
   updateClock();
+  if (resumeSilentMicSync) {
+    await setLiveMicSyncEnabled(true);
+  }
   if (!autoDjFrame) {
     runAutoDj();
   }
