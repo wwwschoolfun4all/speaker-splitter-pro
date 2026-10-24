@@ -124,6 +124,7 @@ class SpeakerPath {
     this.limiterBypass = this.context.createGain();
     this.ceiling = this.context.createGain();
     this.analyser = this.context.createAnalyser();
+    this.syncAnalyser = this.context.createAnalyser();
 
     this.delay.delayTime.value = 0;
     this.deckGain.gain.value = 1;
@@ -142,6 +143,8 @@ class SpeakerPath {
     this.ceiling.gain.value = 0.82;
     this.analyser.fftSize = 4096;
     this.analyser.smoothingTimeConstant = 0.82;
+    this.syncAnalyser.fftSize = 4096;
+    this.syncAnalyser.smoothingTimeConstant = 0.35;
 
     this.connectGraph();
     this.setCrossover(160, 3500);
@@ -174,6 +177,7 @@ class SpeakerPath {
     }
 
     this.eqNodes[this.eqNodes.length - 1]
+      .connect(this.syncAnalyser)
       .connect(this.delay)
       .connect(this.volume)
       .connect(this.djGain)
@@ -500,6 +504,14 @@ class SpeakerPath {
     }
     this.analyser.getByteFrequencyData(this.spectrum);
     return this.spectrum;
+  }
+
+  getSyncSpectrum() {
+    if (!this.syncSpectrum || this.syncSpectrum.length !== this.syncAnalyser.frequencyBinCount) {
+      this.syncSpectrum = new Uint8Array(this.syncAnalyser.frequencyBinCount);
+    }
+    this.syncAnalyser.getByteFrequencyData(this.syncSpectrum);
+    return this.syncSpectrum;
   }
 
   getLevel() {
@@ -967,6 +979,14 @@ export class AudioEngine extends EventTarget {
       id,
       spectrum: this.paths[id].getSpectrum(),
       analyser: this.paths[id].analyser,
+    }));
+  }
+
+  getSyncAnalyserData() {
+    return this.getActiveSpeakerIds().map((id) => ({
+      id,
+      spectrum: this.paths[id].getSyncSpectrum(),
+      analyser: this.paths[id].syncAnalyser,
     }));
   }
 

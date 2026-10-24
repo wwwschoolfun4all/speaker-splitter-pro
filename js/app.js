@@ -6,7 +6,7 @@ import {
   formatHz,
   formatTime,
 } from "./constants.js?v=20260606-live-mic-sync";
-import { AudioEngine } from "./audio-engine.js?v=20260611-real-crossfade";
+import { AudioEngine } from "./audio-engine.js?v=20261024-silent-mic-sync";
 import { DeviceManager } from "./device-manager.js?v=20260606-all-devices";
 import { SpectrumVisualizer } from "./visualizer.js";
 import {
@@ -21,7 +21,7 @@ import {
   saveLastSession,
   savePreset,
 } from "./presets.js?v=20260606-live-mic-sync";
-import { LiveMicSync, runLatencyWizard, runMicrophoneCalibration } from "./calibration.js?v=20260606-live-mic-sync";
+import { LiveMicSync, runLatencyWizard, runMicrophoneCalibration } from "./calibration.js?v=20261024-silent-mic-sync";
 
 const $ = (id) => document.getElementById(id);
 const QUEUE_PREFS_KEY = "speaker-splitter-pro.queue-prefs.v1";
@@ -1589,7 +1589,7 @@ function liveMicSyncCallbacks() {
   return {
     status(message) {
       dom.calibrationStatus.textContent = message;
-      setEngineStatus(message, message.includes("locked") || message.includes("on") ? "ok" : "warn");
+      setEngineStatus(message, message.includes("locked") || message.includes("aligned") ? "ok" : "warn");
     },
     progress(value) {
       dom.calibrationProgress.value = value;
@@ -1628,7 +1628,7 @@ async function setLiveMicSyncEnabled(enabled) {
   liveMicSync = null;
   engine.setLiveMicSyncEnabled(false);
   dom.liveMicSyncToggle.checked = false;
-  setEngineStatus(engine.isPlaying ? "Playing" : "Live mic sync off", engine.isPlaying ? "ok" : "warn");
+  setEngineStatus(engine.isPlaying ? "Playing" : "Silent mic sync off", engine.isPlaying ? "ok" : "warn");
   queueAutosave();
 }
 
@@ -1905,11 +1905,11 @@ async function init() {
     engine.applySettings(lastSession);
     if (engine.getSettings().liveMicSyncEnabled) {
       engine.setLiveMicSyncEnabled(false);
-      setPresetStatus("Last session restored; enable Live mic sync when ready");
+      setPresetStatus("Last session restored; enable Silent mic sync when ready");
     }
     djBaseCrossoverHz = engine.getSettings().crossoverHz;
     restoringSession = false;
-    if (!dom.presetStatus.textContent.includes("Live mic sync")) {
+    if (!dom.presetStatus.textContent.includes("Silent mic sync")) {
       setPresetStatus("Last session restored");
     }
   }

@@ -4,8 +4,13 @@ const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 const CALIBRATION_TRIALS = 5;
 const MIN_VALID_TRIALS = 3;
 const MAX_LATENCY_SPREAD_MS = 18;
-const LIVE_SYNC_INTERVAL_MS = 9000;
-const LIVE_SYNC_MAX_ADJUST_MS = 6;
+const LIVE_SYNC_SAMPLE_MS = 40;
+const LIVE_SYNC_INTERVAL_MS = 2400;
+const LIVE_SYNC_HISTORY_SIZE = 150;
+const LIVE_SYNC_MIN_SAMPLES = 68;
+const LIVE_SYNC_MAX_DELAY_MS = 900;
+const LIVE_SYNC_MAX_ADJUST_MS = 2;
+const LIVE_SYNC_MIN_CORRELATION = 0.68;
 
 function getBufferStats(buffer) {
   let peak = 0;
@@ -404,10 +409,14 @@ export class LiveMicSync {
     this.context = null;
     this.analyser = null;
     this.buffer = null;
+    this.spectrum = null;
     this.timer = null;
+    this.sampleTimer = null;
     this.running = false;
     this.inCycle = false;
-    this.noiseProfile = { peak: 0.04, rms: 0.012 };
+    this.history = {};
+    this.stableCandidates = {};
+    this.lastAdjustmentAt = 0;
   }
 
   async start() {
@@ -437,14 +446,14 @@ export class LiveMicSync {
     this.analyser.smoothingTimeConstant = 0;
     source.connect(this.analyser);
     this.buffer = new Float32Array(this.analyser.fftSize);
-    this.noiseProfile = await sampleNoiseFloor(this.analyser, this.buffer, 320);
+    this.spectrum = new Uint8Array(this.analyser.frequencyBinCount);
 
     this.running = true;
-    this.callbacks.status?.("Live mic sync on");
-    await this.runCycle();
+    this.callbacks.status?.("Silent mic sync listening");
+    this.sampleTimer = window.setInterval(() => this.captureSample(), LIVE_SYNC_SAMPLE_MS);
     this.timer = window.setInterval(() => {
       this.runCycle().catch((error) => {
-        this.callbacks.status?.(error.message || "Live sync missed");
+        this.callbacks.status?.(error.message || "Silent sync listening");
       });
     }, LIVE_SYNC_INTERVAL_MS);
   }
@@ -455,13 +464,119 @@ export class LiveMicSync {
       window.clearInterval(this.timer);
       this.timer = null;
     }
+    if (this.sampleTimer) {
+      window.clearInterval(this.sampleTimer);
+      this.sampleTimer = null;
+    }
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = null;
     await this.context?.close?.();
     this.context = null;
     this.analyser = null;
     this.buffer = null;
-    this.callbacks.status?.("Live mic sync off");
+    this.spectrum = null;
+    this.history = {};
+    this.stableCandidates = {};
+    this.callbacks.status?.("Silent mic sync off");
+  }
+
+  averageBand(spectrum, analyser, lowHz, highHz) {
+    const nyquist = analyser.context.sampleRate / 2;
+    const start = Math.max(0, Math.floor((lowHz / nyquist) * spectrum.length));
+    const end = Math.min(spectrum.length - 1, Math.ceil((highHz / nyquist) * spectrum.length));
+    let sum = 0;
+    let count = 0;
+
+    for (let index = start; index <= end; index += 1) {
+      sum += spectrum[index] || 0;
+      count += 1;
+    }
+
+    return count ? sum / count / 255 : 0;
+  }
+
+  appendSample(id, source, microphone) {
+    this.history[id] ||= { source: [], microphone: [] };
+    const history = this.history[id];
+    history.source.push(source);
+    history.microphone.push(microphone);
+    if (history.source.length > LIVE_SYNC_HISTORY_SIZE) {
+      history.source.shift();
+      history.microphone.shift();
+    }
+  }
+
+  captureSample() {
+    if (!this.running || !this.analyser || !this.spectrum || !this.engine.isPlaying || this.engine.liveStream) {
+      return;
+    }
+
+    this.analyser.getByteFrequencyData(this.spectrum);
+    const sources = this.engine.getSyncAnalyserData();
+    for (const entry of sources) {
+      const band = entry.id === "bass" ? [38, 220] : entry.id === "mid" ? [240, 2600] : entry.id === "treble" ? [2500, 10000] : [300, 5200];
+      const sourceEnergy = this.averageBand(entry.spectrum, entry.analyser, band[0], band[1]);
+      const microphoneEnergy = this.averageBand(this.spectrum, this.analyser, band[0], band[1]);
+      this.appendSample(entry.id, sourceEnergy, microphoneEnergy);
+    }
+  }
+
+  correlation(source, microphone, lagFrames) {
+    const length = Math.min(source.length, microphone.length) - lagFrames;
+    if (length < LIVE_SYNC_MIN_SAMPLES) {
+      return Number.NEGATIVE_INFINITY;
+    }
+
+    let sourceMean = 0;
+    let microphoneMean = 0;
+    for (let index = 0; index < length; index += 1) {
+      sourceMean += source[index];
+      microphoneMean += microphone[index + lagFrames];
+    }
+    sourceMean /= length;
+    microphoneMean /= length;
+
+    let numerator = 0;
+    let sourcePower = 0;
+    let microphonePower = 0;
+    for (let index = 0; index < length; index += 1) {
+      const sourceDelta = source[index] - sourceMean;
+      const microphoneDelta = microphone[index + lagFrames] - microphoneMean;
+      numerator += sourceDelta * microphoneDelta;
+      sourcePower += sourceDelta * sourceDelta;
+      microphonePower += microphoneDelta * microphoneDelta;
+    }
+
+    return numerator / Math.sqrt(Math.max(sourcePower * microphonePower, 1e-9));
+  }
+
+  estimateDelay(id) {
+    const history = this.history[id];
+    if (!history || history.source.length < LIVE_SYNC_MIN_SAMPLES) {
+      return null;
+    }
+
+    const maxLagFrames = Math.min(
+      Math.floor(LIVE_SYNC_MAX_DELAY_MS / LIVE_SYNC_SAMPLE_MS),
+      history.source.length - LIVE_SYNC_MIN_SAMPLES,
+    );
+    let best = { correlation: Number.NEGATIVE_INFINITY, lagFrames: 0 };
+
+    for (let lagFrames = 0; lagFrames <= maxLagFrames; lagFrames += 1) {
+      const correlation = this.correlation(history.source, history.microphone, lagFrames);
+      if (correlation > best.correlation) {
+        best = { correlation, lagFrames };
+      }
+    }
+
+    if (best.correlation < LIVE_SYNC_MIN_CORRELATION) {
+      return null;
+    }
+
+    return {
+      confidence: best.correlation,
+      delayMs: best.lagFrames * LIVE_SYNC_SAMPLE_MS,
+    };
   }
 
   async runCycle() {
@@ -477,71 +592,55 @@ export class LiveMicSync {
       }
 
       if (!this.engine.isPlaying) {
-        this.callbacks.status?.("Live mic sync armed");
+        this.callbacks.status?.("Silent mic sync armed");
         return;
       }
 
-      this.noiseProfile = await sampleNoiseFloor(this.analyser, this.buffer, 160);
-      const readings = {};
-      const peaks = {};
-
-      for (const id of activeIds) {
-        this.callbacks.status?.(`Checking ${id} sync`);
-        await sleep(110);
-        const firedAt = performance.now();
-        const startDelayMs = await this.engine.playSpeakerPing(id, {
-          gain: id === "bass" ? 0.8 : 0.68,
-          startDelay: 0.1,
-          toneHz: 1400,
-          noiseAmount: 0.86,
-          bypassCrossover: true,
-        });
-
-        const result = await waitForImpulse(
-          this.analyser,
-          this.buffer,
-          this.noiseProfile,
-          firedAt + startDelayMs,
-          1350,
-        );
-        readings[id] = result.latencyMs;
-        peaks[id] = result.peak;
-        await sleep(120);
-      }
-
-      const hardwareLatencies = {};
-      for (const id of activeIds) {
-        const speaker = this.engine.getSettings().speakers[id];
-        hardwareLatencies[id] = readings[id] - speaker.delayMs;
-      }
-
-      const hardwareValues = Object.values(hardwareLatencies).filter(Number.isFinite);
-      if (hardwareValues.length < 2) {
-        this.callbacks.status?.("Live sync needs clearer signal");
+      const estimates = Object.fromEntries(
+        activeIds.map((id) => [id, this.estimateDelay(id)]),
+      );
+      const usable = activeIds.filter((id) => estimates[id]);
+      if (usable.length < 2) {
+        this.callbacks.status?.("Silent sync listening for clear bass");
         return;
       }
 
-      const slowestHardware = Math.max(...hardwareValues);
+      const signature = usable.map((id) => `${id}:${estimates[id].delayMs}`).join("|");
+      for (const key of Object.keys(this.stableCandidates)) {
+        if (key !== signature) {
+          delete this.stableCandidates[key];
+        }
+      }
+      this.stableCandidates[signature] = (this.stableCandidates[signature] || 0) + 1;
+      const isStable = this.stableCandidates[signature] >= 2;
+      const slowestDelay = Math.max(...usable.map((id) => estimates[id].delayMs));
       let biggestAdjustment = 0;
-      for (const id of activeIds) {
-        const speaker = this.engine.getSettings().speakers[id];
-        const targetDelay = clamp(slowestHardware - hardwareLatencies[id], 0, MAX_DELAY_MS);
-        const adjustment = clamp(targetDelay - speaker.delayMs, -LIVE_SYNC_MAX_ADJUST_MS, LIVE_SYNC_MAX_ADJUST_MS);
-        if (Math.abs(adjustment) >= 0.8) {
-          this.engine.setSpeakerDelay(id, roundTenth(speaker.delayMs + adjustment));
-          biggestAdjustment = Math.max(biggestAdjustment, Math.abs(adjustment));
+      if (isStable && performance.now() - this.lastAdjustmentAt > 7000) {
+        for (const id of usable) {
+          const speaker = this.engine.getSettings().speakers[id];
+          const targetDelay = clamp(speaker.delayMs + slowestDelay - estimates[id].delayMs, 0, MAX_DELAY_MS);
+          const adjustment = clamp(targetDelay - speaker.delayMs, -LIVE_SYNC_MAX_ADJUST_MS, LIVE_SYNC_MAX_ADJUST_MS);
+          if (Math.abs(adjustment) >= 0.8) {
+            this.engine.setSpeakerDelay(id, roundTenth(speaker.delayMs + adjustment));
+            biggestAdjustment = Math.max(biggestAdjustment, Math.abs(adjustment));
+          }
+        }
+        if (biggestAdjustment) {
+          this.lastAdjustmentAt = performance.now();
         }
       }
 
       this.callbacks.progress?.(100);
       this.callbacks.status?.(
         biggestAdjustment >= 0.8
-          ? `Live synced ${roundTenth(biggestAdjustment)} ms`
-          : "Live sync locked",
+          ? `Silent sync aligned ${roundTenth(biggestAdjustment)} ms`
+          : isStable
+            ? "Silent sync locked"
+            : "Silent sync confirming alignment",
       );
-      this.callbacks.result?.({ readings, peaks, adjustmentMs: biggestAdjustment });
+      this.callbacks.result?.({ estimates, adjustmentMs: biggestAdjustment });
     } catch (error) {
-      this.callbacks.status?.("Live sync listening");
+      this.callbacks.status?.("Silent sync listening");
     } finally {
       this.inCycle = false;
     }
